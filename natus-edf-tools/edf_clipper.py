@@ -1,3 +1,39 @@
+"""
+EDF File Processor
+
+Author: Dr. Milad Khaki
+Created on: Feb 21, 2025
+
+Description:
+This script processes EDF (European Data Format) files by extracting metadata or clipping based on user-defined parameters.
+It supports:
+- Extracting metadata from an EDF file and saving it in JSON format.
+- Clipping an EDF file based on a provided JSON configuration.
+
+Usage:
+    python edf_processor.py --input <input.edf> --metadata --output <output.json>
+    python edf_processor.py --input <input.edf> --clip <clip_params.json> --output <clipped.edf>
+
+Arguments:
+    --input, -i   (str)  : Input EDF file path (Required).
+    --metadata, -m       : Extract metadata from the EDF file.
+    --clip, -c    (str)  : JSON file with clipping parameters.
+    --output, -o  (str)  : Output file path.
+
+Dependencies:
+    - Python 3.x
+    - numpy
+    - tqdm
+    - pandas
+    - openpyxl
+    - edflibpy
+    - EDF_reader_mld
+
+License:
+This project is licensed under the MIT License.
+"""
+
+
 import numpy as np
 from tqdm import tqdm
 import time
