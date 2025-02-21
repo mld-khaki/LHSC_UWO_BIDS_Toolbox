@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Dec 16 13:57:16 2024
-
-@author: Dr. Milad Khaki
-"""
+## FolderAnalysis.py
+# Author: Dr. Milad Khaki
+# Date: 2024-12-16
+# Description: This script counts the number of subfolders inside a given main folder while skipping a specific 'code' directory.
+# Usage: Run the script to count subfolders in a specified dataset directory.
+# License: MIT License
 
 import os
 import re

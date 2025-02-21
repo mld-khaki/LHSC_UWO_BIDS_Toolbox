@@ -1,3 +1,10 @@
+## Natus meta data extraction tool
+# Author: Dr. Milad Khaki
+# Date: 2025-02-21
+# Description: This script extracts metadata from Natus EEG files by parsing key-tree formatted content and saves the results to an Excel file.
+# Usage: python Natus_InfoExtractor.py <input_dir> [-o output.xlsx]
+# License: MIT License
+
 import re
 import pandas as pd
 from pathlib import Path

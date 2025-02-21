@@ -1,3 +1,10 @@
+## TSV_JSON_redacting_tool
+# Author: Dr. Milad Khaki
+# Date: 2025-02-21
+# Description: This script redacts names from TSV and JSON files based on an Excel list.
+# Usage: python TSV_JSON_redacting_tool.py <excel_path> <folder_path>
+# License: MIT License
+
 import os
 import json
 import pandas as pd

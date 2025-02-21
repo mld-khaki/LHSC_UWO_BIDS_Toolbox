@@ -1,8 +1,8 @@
-## merge_tsv.py
+## TSV_Participant_Merger.py
 # Author: Dr. Milad Khaki
 # Date: 2025-02-21
 # Description: This script merges two TSV files row-wise and saves the output as a new TSV file.
-# Usage: python merge_tsv.py <file1> <file2> <output_file>
+# Usage: python TSV_Participant_Merger.py <file1> <file2> <output_file>
 # License: MIT License
 
 import pandas as pd

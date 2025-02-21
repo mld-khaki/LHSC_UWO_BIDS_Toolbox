@@ -1,4 +1,36 @@
-#a sample of how to use EDF_reader_mld
+"""
+EDF Directory Scanner
+
+Author: Dr. Milad Khaki
+Created on: Dec 16, 2024
+
+Description:
+This script scans a folder recursively for EDF (European Data Format) files and extracts their metadata using the `EDF_reader_mld` library. The extracted information is saved in the specified output format (`.xlsx`, `.csv`, `.json`, `.txt`).
+
+Usage:
+    python EDF_dir_scanner.py <folder> --output <output_file>
+
+Arguments:
+    folder: The directory to scan for EDF files.
+    --output: (Optional) The output file with a supported format.
+              Defaults to 'edf_data.xlsx'.
+
+Supported Output Formats:
+    - Excel (`.xlsx`, `.xls`)
+    - CSV (`.csv`)
+    - JSON (`.json`)
+    - Tab-separated text (`.txt`)
+
+Requirements:
+    - Python 3.x
+    - pandas
+    - openpyxl (for Excel support)
+    - EDF_reader_mld (custom library for reading EDF files)
+
+License:
+This project is licensed under the MIT License.
+"""
+
 import os
 import json
 import argparse

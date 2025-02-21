@@ -1,3 +1,10 @@
+## NatusExportList_Generator
+# Author: Dr. Milad Khaki
+# Date: 2025-02-21
+# Description: This script scans a main folder for EEG subdirectories matching a specific pattern and generates a text file listing valid EEG files with a constant path.
+# Usage: python NatusExportList_Generator.py <main_folder> <output_file> [constant_path]
+# License: MIT License
+
 import os
 import re
 import sys

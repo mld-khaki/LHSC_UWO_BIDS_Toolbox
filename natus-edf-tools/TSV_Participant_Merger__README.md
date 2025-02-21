@@ -1,4 +1,4 @@
-# Merge TSV Files
+# TSV_Participant_Merger
 
 ## Overview
 This script merges two TSV (Tab-Separated Values) files row-wise and saves the output as a new TSV file.
