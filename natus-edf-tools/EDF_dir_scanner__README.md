@@ -6,7 +6,7 @@ This script recursively scans a folder for **EDF (European Data Format)** files 
 ## **Installation**
 Make sure you have the required dependencies installed:
 
-
+```sh
 pip install pandas openpyxl
 ```
 
