@@ -8,8 +8,8 @@ This script processes EDF (European Data Format) files to extract and clip speci
 based on user-defined parameters. It supports metadata extraction and signal selection, making
 it useful for EEG and other biosignal processing applications.
 
-Author: [Your Name]
-Date: [YYYY-MM-DD]
+Author: Dr. Milad Khaki	
+Date: 2025 Feb 20
 
 Dependencies:
 - numpy
