@@ -33,6 +33,11 @@ tools = {
         "usage": "TSV_Participant_Merger.py [-h] file1 file2 output_file",
         "args": ["file1 (File)", "file2 (File)", "output_file (File)"],
         "arg_name": ["--output", ""]        
+    },
+    "EDF_RAR_archive_purger": {
+        "usage": "EDF_RAR_archive_purger.py [-h] <folder> output_file",
+        "args": ["search_folder (Folder)", "out_log_file (File)"],
+        "arg_name": ["", ""]        
     }
 }
 
@@ -91,7 +96,7 @@ while True:
                     args.append(values[arg_name])
             
             # Run selected script with arguments
-            script_path = f"./mld_lib/{tool}.py"  # Adjust if scripts are in a different directory
+            script_path = f"./{tool}.py"  # Adjust if scripts are in a different directory
             command = [sys.executable, script_path] + args
 
             try:
