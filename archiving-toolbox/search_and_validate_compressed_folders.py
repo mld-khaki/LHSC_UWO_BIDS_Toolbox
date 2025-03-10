@@ -2,20 +2,15 @@ import os
 import sys
 import time
 
-# Add the library path dynamically
-cur_path = r'/volume1/seeg_data/code/'
-sys.path.append(os.path.abspath(cur_path))
-cur_path = r'y:\\code\\'
-sys.path.append(os.path.abspath(cur_path))
-os.environ['PATH'] += os.pathsep + cur_path
+from common_libs.rar_checksum_tester import rar_checksum_eval
 
-from _lhsc_lib.rar_checksum_tester import rar_checksum_eval
+cur_path = "c:/tmp_nosync/"
 
-# Default search directories
-DEFAULT_SEARCH_DIRS = [
-    "/volume1/seeg_data/ieeg_dataset_a/bids/",
-    "/volume1/seeg_data/ieeg_dataset_b/bids/"
-]
+try:
+    os.mkdir(cur_path)
+except:
+    pass
+
 
 required_extensions = ['.rar', '.edf']
 

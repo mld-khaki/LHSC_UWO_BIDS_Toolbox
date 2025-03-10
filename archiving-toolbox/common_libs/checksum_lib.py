@@ -2,6 +2,8 @@ import os
 import hashlib
 import errno
 
+debug = 1
+
 def is_file_in_use(file_path):
     """
     Check if a file is currently being used by another process.
@@ -21,9 +23,15 @@ def is_file_in_use(file_path):
         # Check for specific errors indicating the file is in use
         if e.errno in {errno.EBUSY, errno.EACCES}:
             return True  # File is in use
+        else:
+            raise(OSError)
         return False  # Other errors indicate the file is not in use
+    except Exception as e:
+        if debug == 1:
+            raise(e)
+    
 
-def calculate_md5(file_path, display_progress=True):
+def mld_calculate_md5(file_path, display_progress=True):
     """
     Calculate the MD5 checksum of a file, with an optional progress display.
     
@@ -96,7 +104,7 @@ def find_and_process_files(start_path, extensions=['.edf', '.edfz', '.rar', '.RA
                     continue
 
                 print(f"Processing {full_path}")
-                checksum = calculate_md5(full_path, display_progress=True)
+                checksum = mld_calculate_md5(full_path, display_progress=True)
                 write_checksum(full_path, checksum)
                 files_found += 1
 

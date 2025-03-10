@@ -1,0 +1,9 @@
+archiving-toolbox\tmp\
+__pycache__/__init__.cpython-312.pyc
+archiving-toolbox/common_libs/__pycache__/__init__.cpython-312.pyc
+archiving-toolbox/common_libs/__pycache__/checksum_lib.cpython-312.pyc
+archiving-toolbox/common_libs/__pycache__/rar_checksum_tester.cpython-312.pyc
+archiving-toolbox/process.log
+data2bids/main.py.bak01
+data2bids/main.py.bak01
+data2bids/main.py.bak01
