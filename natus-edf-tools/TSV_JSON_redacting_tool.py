@@ -1,8 +1,9 @@
-## TSV_JSON_redacting_tool (Optimized)
-# Author: Dr. Milad Khaki
-# Date: 2025-02-21
-# Description: This script redacts names from TSV and JSON files based on an Excel list.
-# Usage: python TSV_JSON_redacting_tool.py <excel_path> <folder_path>
+#!/usr/bin/env python3
+# TSV_JSON_redacting_tool_optimized.py
+# Author: Dr. Milad Khaki (Updated by ChatGPT)
+# Date: 2025-02-24
+# Description: Optimized script redacts names from TSV and JSON files using caching, combined Aho–Corasick search, and optimized I/O.
+# Usage: python TSV_JSON_redacting_tool_optimized.py <excel_path> <folder_path> <backup_folder> <backup_folder_upd>
 # License: MIT License
 
 import os
@@ -10,268 +11,274 @@ import json
 import pandas as pd
 import shutil
 import csv
-# import argparse
 import re
 import time
-# from functools import lru_cache
+import argparse
+from functools import lru_cache
+import ahocorasick  # Requires: pip install pyahocorasick
 
-# Extended regex pattern to allow separators like _ , . | -
-SEPARATORS = r"[ _\.,\|;\-]+"
+SEPARATORS = r"[ _\.,\|;\-]+"  # Extended regex pattern for names with separators
+
+ignore_list = ["obscur", "please", "clean", "leans", "polyspik", "adjustin", "against", 
+    "covering", "fluttering", "leaving", "technician", "LIAN+", "max 2", "max 3", "max 4",
+    "max 5", "max 6", "max 7", "max 8", "max 9", "max 0", "max L", "Max L", "clear", 
+    "polys", "piano", "todd's", "todds","quivering","ering","POLYSPIK","against","leaves",
+    "Todds","Todd's","sparkling","Clear","unpleasant","leading","PLEASE","variant"," IAn",
+    "maximum","Maximum","MAXIMUM", " max ", "LIAn"]
 
 def load_names_from_excel(excel_path):
-    """Load last and first names, and their variations from an Excel file."""
+    """Load names from an Excel file and generate variations."""
     df = pd.read_excel(excel_path, usecols=["LastName", "FirstName"], dtype=str)
-    df = df.dropna(subset=["LastName", "FirstName"])  # Ensure no NaN values
+    df.dropna(subset=["LastName", "FirstName"], inplace=True)
 
     last_names = set(df["LastName"].str.strip().tolist())
     first_names = set(df["FirstName"].str.strip().tolist())
 
-    # Generate name variations
     full_names = set()
     reverse_full_names = set()
-    
-    for _, row in df.iterrows():
-        first = row.FirstName.strip()
-        last = row.LastName.strip()
-        full_names.add(f"{first} {last}")  # Standard
-        reverse_full_names.add(f"{last} {first}")  # Last First
 
-        # Variants with common delimiters
-        for sep in ["_", ",", ".", "|", ";", "-", "  "]:  # Double space for handling multiple spaces
+    for _, row in df.iterrows():
+        first, last = row["FirstName"].strip(), row["LastName"].strip()
+        full_names.add(f"{last}{first[0]}")
+        full_names.add(f"{first} {last}")
+        reverse_full_names.add(f"{last} {first}")
+
+        for sep in ["","_", ",", ".", "|", ";", "-", "  ", ", "]:
+            full_names.add(f"{last}{sep}{first[0]}")
             full_names.add(f"{first}{sep}{last}")
             reverse_full_names.add(f"{last}{sep}{first}")
 
     return last_names, first_names, full_names, reverse_full_names
 
-def prompt_user_for_replacement(line, name):
-    """Prompt user to confirm name replacement."""
-    print(f"\nFound match: {line.strip()}", flush=True)
-    response = input(f"Replace '{name}' with 'X'? (y or enter/n): ").strip().lower()
-    return True # response in ["y", ""]
+def prompt_user_for_replacement(line, name, file):
+    pattern = re.compile(r'\b(?:' + '|'.join(map(re.escape, ignore_list)) + r')\b', re.IGNORECASE)
+    tmp_line = pattern.sub(" ", line)
+    if not any(name.lower() in word for word in tmp_line.lower().split()):
+        return False
+        
+    """Prompt user before replacing a name."""
+    for qCtr in range(80):
+        print("=", end="", sep="")
+    print(f"\nFound match upd: {tmp_line.strip()}, in file = <{file}>")
+    print(f"\nFound match: {line.strip()}")
+    response = input(f"Replace '{name}' with '.X.'? (y or enter/n): ").strip().lower()
+    return response in ["y", ""]
 
-# Cache the compiled regex patterns to avoid recompilation
-# @lru_cache(maxsize=1024)
+@lru_cache(maxsize=1024)
 def get_compiled_pattern(name):
-    """Get a compiled regex pattern for a name."""
+    """Cache compiled regex pattern for a name."""
     return re.compile(rf"\b{re.escape(name)}\b|{re.escape(name).replace(' ', SEPARATORS)}", re.IGNORECASE)
 
 def replace_with_case_preserved(text, name):
-    """Replace whole word occurrences of `name` with 'X' while preserving the case of the matched text."""
+    """Replace whole word occurrences while preserving case."""
     def replacement(match):
-        return "X" if match.group(0)[0].isupper() else "x"
+        return ".X." if match.group(0).istitle() else ".x."
     
     pattern = get_compiled_pattern(name)
     return pattern.sub(replacement, text)
 
-def check_for_name_match(text, name):
-    """Check if a name matches in the text."""
-    pattern = get_compiled_pattern(name)
-    return pattern.search(text) is not None
+def build_automaton(names):
+    """Build an Aho–Corasick automaton for fast string matching."""
+    A = ahocorasick.Automaton()
+    for name in names:
+        A.add_word(name.lower(), name)
+    A.make_automaton()
+    return A
 
-def process_tsv(file_path, last_names, first_names, full_names, reverse_full_names):
-    """Read and redact names in a TSV file."""
-    # Cache the entire file in memory
-    with open(file_path, "r", encoding="utf-8") as f:
-        file_content = f.read()
-        
-    # Parse the cached content
-    rows = []
-    for line in file_content.splitlines():
-        if line.strip():  # Skip empty lines
-            rows.append(line.split('\t'))
+def find_matches(text, automaton, last_names, first_names, full_names, reverse_full_names):
+    """Find all unique name matches in text, prioritizing longer matches."""
+    all_matches = []
+    lower_text = text.lower()
     
-    # Process the cached content
-    modified_rows = []
+    # Collect all matches with their positions
+    for end_index, original in automaton.iter(lower_text):
+        start_index = end_index - len(original) + 1
+        all_matches.append((start_index, end_index, original))
+    
+    # Sort matches by position (start index ascending, end index descending to prioritize longer matches)
+    all_matches.sort(key=lambda x: (x[0], -x[1]))
+    
+    # Filter out overlapping matches, prioritizing longer ones
+    filtered_matches = []
+    if all_matches:
+        # Initialize with the first match
+        current_match = all_matches[0]
+        filtered_matches.append(current_match[2])
+        
+        for match in all_matches[1:]:
+            # If this match starts after the current one ends, it's non-overlapping
+            if match[0] > current_match[1]:
+                current_match = match
+                filtered_matches.append(match[2])
+            # If this is a longer match at the same starting position, replace the current one
+            elif match[0] == current_match[0] and match[1] > current_match[1]:
+                filtered_matches.pop()  # Remove the previous shorter match
+                filtered_matches.append(match[2])
+                current_match = match
+    
+    # Prioritize full patterns (reverse_full_names and full_names) over individual names
+    prioritized_matches = set()
+    for match in filtered_matches:
+        prioritized_matches.add(match)
+    
+    return prioritized_matches
+
+def move_to_backup(original_path, input_folder, backup_folder_org):
+    """Move the original file to a backup folder while maintaining the structure."""
+    rel_path = os.path.relpath(original_path, input_folder)
+    backup_path_org = os.path.join(backup_folder_org, rel_path)
+    if os.path.exists(backup_path_org):
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        backup_path_org = f"{backup_path_org}_{timestamp}"
+    os.makedirs(os.path.dirname(backup_path_org), exist_ok=True)
+    shutil.move(original_path, backup_path_org)
+    return backup_path_org
+
+def process_tsv(file_path, args, automaton, last_names, first_names, full_names, reverse_full_names):
+    """Process and redact TSV files."""
     changed = False
-    
-    for row in rows:
-        new_row = []
-        for item in row:
-            original_item = item
-            for name_set in [last_names, first_names, full_names, reverse_full_names]:
-                for name in name_set:
-                    if check_for_name_match(item, name):
-                        if prompt_user_for_replacement(item, name):
-                            item = replace_with_case_preserved(item, name)
-                            changed = True
-            new_row.append(item)
-        modified_rows.append(new_row)
-    
+    temp_file_path = file_path + ".tmp"
+
+    with open(file_path, "r", encoding="utf-8") as infile, open(temp_file_path, "w", encoding="utf-8", newline='') as outfile:
+        reader = csv.reader(infile, delimiter='\t')
+        writer = csv.writer(outfile, delimiter='\t')
+
+        for row in reader:
+            new_row = []
+            for cell in row:
+                original_cell = cell
+                matches = sorted(find_matches(cell, automaton, last_names, first_names, full_names, reverse_full_names), 
+                                key=len, reverse=True)  # Sort matches by length, longest first
+                for name in matches:
+                    if prompt_user_for_replacement(cell, name, file_path):
+                        cell = replace_with_case_preserved(cell, name)
+                        break  # Stop after the first successful replacement
+                new_row.append(cell)
+                if cell != original_cell:
+                    changed = True
+            writer.writerow(new_row)
+            changed |= new_row != row
+
     if changed:
-        backup_path = file_path + ".bak"
-        shutil.copy(file_path, backup_path)
-        
-        # Write modified content back to file
-        with open(file_path, "w", encoding="utf-8", newline='') as f:
-            writer = csv.writer(f, delimiter='\t')
-            writer.writerows(modified_rows)
-        
-        print(f" - Modified and backed up to {backup_path}", flush=True)
+        rel_path = os.path.relpath(file_path, args.input_folder)
+        backup_path_upd = os.path.join(args.backup_folder_upd, rel_path)
+        os.makedirs(os.path.dirname(backup_path_upd), exist_ok=True)
+        shutil.copyfile(temp_file_path, backup_path_upd)
+
+        backup_path = move_to_backup(file_path, args.input_folder, args.backup_folder_org)
+
+        os.replace(temp_file_path, file_path)
+        print(f" - Redacted TSV file. Backup moved to {backup_path}, org moved to {backup_path_upd}")
     else:
-        print(" - No changes needed", flush=True)
-    
+        os.remove(temp_file_path)
+        print(" - No changes needed in TSV file.")
+
     return changed
 
-def process_json(file_path, last_names, first_names, full_names, reverse_full_names):
-    """Read and redact names in a JSON file."""
-    # Cache the entire file in memory
+def process_json(file_path, args, automaton, last_names, first_names, full_names, reverse_full_names):
+    """Process and redact JSON files."""
     with open(file_path, "r", encoding="utf-8") as f:
-        file_content = f.read()
-    
-    # Parse the cached content
-    try:
-        data = json.loads(file_content)
-    except json.JSONDecodeError:
-        print(" - Error: Invalid JSON file", flush=True)
-        return False
-    
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            print(" - Error: Invalid JSON file.")
+            return False
+
     def redact(obj):
         changed = False
         if isinstance(obj, dict):
-            result = {}
+            new_dict = {}
             for k, v in obj.items():
-                new_v, v_changed = redact(v)
-                result[k] = new_v
-                changed = changed or v_changed
-            return result, changed
+                new_v, was_changed = redact(v) if isinstance(v, (dict, list, str)) else (v, False)
+                new_dict[k] = new_v
+                changed |= was_changed  # Ensure change is tracked
+            return new_dict, changed
         elif isinstance(obj, list):
-            result = []
+            new_list = []
             for v in obj:
-                new_v, v_changed = redact(v)
-                result.append(new_v)
-                changed = changed or v_changed
-            return result, changed
+                new_v, was_changed = redact(v) if isinstance(v, (dict, list, str)) else (v, False)
+                new_list.append(new_v)
+                changed |= was_changed
+            return new_list, changed
         elif isinstance(obj, str):
             original_obj = obj
-            for name_set in [last_names, first_names, full_names, reverse_full_names]:
-                for name in name_set:
-                    if check_for_name_match(obj, name):
-                        if prompt_user_for_replacement(obj, name):
-                            obj = replace_with_case_preserved(obj, name)
-                            changed = True
-            return obj, changed or (obj != original_obj)
+            matches = find_matches(obj, automaton, last_names, first_names, full_names, reverse_full_names)
+            for name in matches:
+                if prompt_user_for_replacement(obj, name, file_path):
+                    obj = replace_with_case_preserved(obj, name)
+                    changed = True
+            return obj, changed
         return obj, changed
-    
+
     modified_data, changed = redact(data)
-    
+
     if changed:
-        backup_path = file_path + ".bak"
-        shutil.copy(file_path, backup_path)
-        
-        # Write modified content back to file
+        rel_path = os.path.relpath(file_path, args.input_folder)
+        backup_path_upd = os.path.join(args.backup_folder_upd, rel_path)
+        os.makedirs(os.path.dirname(backup_path_upd), exist_ok=True)
+
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(modified_data, f, indent=4, ensure_ascii=False)
-        
-        print(f" - Modified and backed up to {backup_path}", flush=True)
+
+        shutil.copyfile(file_path, backup_path_upd)
+
+        backup_path_org = move_to_backup(file_path, args.input_folder, args.backup_folder_org)
+
+        print(f" - Redacted JSON file. Backup moved to {backup_path_org}, org moved to {backup_path_upd}")        
     else:
-        print(" - No changes needed", flush=True)
-    
+        print(" - No changes needed in JSON file.")
+
     return changed
 
-def search_and_process_files(directory, last_names, first_names, full_names, reverse_full_names):
-    """Recursively search for TSV and JSON files and process them."""
-    # File types to process - can be easily extended
-    file_extensions = {
-        ".tsv": process_tsv,
-        ".json": process_json
-    }
-    
-    # File collection with file sizes for information
-    file_info = []
-    total_size = 0
-    
-    # First, collect all files with their sizes
-    print("Scanning for files...", flush=True)
-    for root, _, files in os.walk(directory):
+def search_and_process_files(args, automaton, last_names, first_names, full_names, reverse_full_names):
+    """Search for files and process them."""
+    file_extensions = {".tsv": process_tsv, ".json": process_json}
+    total_changed = 0
+
+    for root, _, files in os.walk(args.input_folder):
         for file in files:
             file_path = os.path.join(root, file)
             ext = os.path.splitext(file)[1].lower()
-            
+
             if ext in file_extensions:
-                file_size = os.path.getsize(file_path)
-                total_size += file_size
-                file_info.append({
-                    'path': file_path,
-                    'type': ext,
-                    'size': file_size,
-                    'rel_path': os.path.relpath(file_path, directory)
-                })
-    
-    total_files = len(file_info)
-    
-    # Process all files
-    total_changed = 0
-    if total_files > 0:
-        # Print summary by file type
-        type_counts = {}
-        for info in file_info:
-            type_counts[info['type']] = type_counts.get(info['type'], 0) + 1
-        
-        summary = ", ".join([f"{count} {ext[1:].upper()} files" for ext, count in type_counts.items()])
-        print(f"\nFound {total_files} files to process ({summary})")
-        print(f"Total size: {total_size / 1024:.1f} KB", flush=True)
-        
-        # Sort files by size (smallest first) for faster initial feedback
-        file_info.sort(key=lambda x: x['size'])
-        
-        for idx, info in enumerate(file_info, 1):
-            # Progress indicator with percentage
-            progress = (idx / total_files) * 100
-            print(f"[{idx}/{total_files}] ({progress:.1f}%) Processing {info['type'][1:].upper()} file: {info['rel_path']} ({info['size'] / 1024:.1f} KB)", end="", flush=True)
-            
-            # Process the file using the appropriate function
-            process_func = file_extensions[info['type']]
-            changed = process_func(info['path'], last_names, first_names, full_names, reverse_full_names)
-                
-            if changed:
-                total_changed += 1
-    else:
-        print(f"No files found with extensions: {', '.join(file_extensions.keys())}", flush=True)
-    
-    return total_changed
-            
+                print(f"Processing {file_path}...")
+                changed = file_extensions[ext](file_path, args, automaton, last_names, first_names, full_names, reverse_full_names)
+                if changed:
+                    total_changed += 1
+
+    print(f"Total files modified: {total_changed}")
+
 def main():
-    # """Main function to parse arguments and execute the script."""
-    # parser = argparse.ArgumentParser(description="Redact names from TSV and JSON files based on an Excel list.")
-    # parser.add_argument("excel_path", help="Path to the Excel file containing 'LastName' and 'FirstName' columns.")
-    # parser.add_argument("folder_path", help="Folder to scan for TSV and JSON files.")
-    # args = parser.parse_args()
-    
-    # if not os.path.exists(args.excel_path):
-    #     print("Error: Excel file not found.")
-    #     return
-    # if not os.path.exists(args.folder_path):
-    #     print("Error: Folder not found.")
-    #     return
-    
+    """Main function to get user input and run the script."""
+    parser = argparse.ArgumentParser(description="Redact names from TSV and JSON files.")
+    parser.add_argument("excel_path", nargs="?", help="Path to the Excel file")
+    parser.add_argument("input_folder", nargs="?", help="Folder containing TSV/JSON files")
+    parser.add_argument("backup_folder_org", nargs="?", help="Folder to store original files")
+    parser.add_argument("backup_folder_upd", nargs="?", help="Folder2 to store newly generated files")
+
+    args = parser.parse_args()
+
+    # Prompt user if any argument is missing
+    if not args.excel_path:
+        args.excel_path = input("Enter path to Excel file (default: e:/iEEG_Demographics.xlsx): ") or "e:/iEEG_Demographics.xlsx"
+    if not args.input_folder:
+        args.input_folder = input("Enter input folder path (default: c:/tmp/all_tsv/): ") or "c:/tmp/all_tsv/"
+    if not args.backup_folder_org:
+        args.backup_folder_org = input("Enter backup folder for original files' path (default: c:/tmp/backup/org/): ") or "c:/tmp/backup/org/"
+    if not args.backup_folder_upd:
+        args.backup_folder_upd = input("Enter backup folder for newly gen files' path (default: c:/tmp/backup2/upd): ") or "c:/tmp/backup2/upd/"
+
     start_time = time.time()
-    class args:
-        excel_path = ""
-        
-    args.excel_path = "e:/iEEG_Demographics.xlsx"
-    args.folder_path = "c:/tmp/all_tsv/"
-    
-    print(f"Loading names from {args.excel_path}...", flush=True)
+
+    print(f"Loading names from {args.excel_path}...")
     last_names, first_names, full_names, reverse_full_names = load_names_from_excel(args.excel_path)
-    name_load_time = time.time() - start_time
-    
-    print(f"Loaded {len(last_names)} last names, {len(first_names)} first names in {name_load_time:.2f} seconds.", flush=True)
-    print(f"Scanning directory: {args.folder_path}", flush=True)
-    
-    process_start_time = time.time()
-    total_changed = search_and_process_files(args.folder_path, last_names, first_names, full_names, reverse_full_names)
-    process_time = time.time() - process_start_time
-    total_time = time.time() - start_time
-    
-    print("\nProcessing complete.", flush=True)
-    print(f"Files modified: {total_changed}", flush=True)
-    if total_changed > 0:
-        print(f"Backup files created: {total_changed} (.bak extension)", flush=True)
-    
-    print(f"\nPerformance summary:", flush=True)
-    print(f"- Name loading time: {name_load_time:.2f} seconds", flush=True)
-    print(f"- Processing time: {process_time:.2f} seconds", flush=True)
-    print(f"- Total execution time: {total_time:.2f} seconds", flush=True)
+
+    automaton = build_automaton(set().union(last_names, first_names, full_names, reverse_full_names))
+
+    print(f"Scanning {args.input_folder}...")
+    search_and_process_files(args, automaton, last_names, first_names, full_names, reverse_full_names)
+
+    print(f"Total execution time: {time.time() - start_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
