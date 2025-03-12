@@ -1623,7 +1623,7 @@ def moveAllFilesinDir(old_fold, new_fold):
             # Move each file to destination Directory
             shutil.move(filePath, new_fold)
 
-def deidentify_edf(source_fname,data_fname, isub, offset_date, rename):
+def deidentify_edf_prv(source_fname,data_fname, isub, offset_date, rename):
     file_in = EDFReader()
     header = file_in.open(data_fname)
     

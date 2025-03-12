@@ -1,95 +1,151 @@
-## Natus meta data extraction tool
+## Natus metadata extraction tool
 # Author: Dr. Milad Khaki
 # Date: 2025-02-21
-# Description: This script extracts metadata from Natus EEG files by parsing key-tree formatted content and saves the results to an Excel file.
+# Description: Extracts metadata from Natus EEG files, including nested key-value structures and folder statistics.
 # Usage: python Natus_InfoExtractor.py <input_dir> [-o output.xlsx]
 # License: MIT License
 
 import re
 import pandas as pd
 from pathlib import Path
+from datetime import datetime, timedelta
 
-def parse_key_tree(content):
-    """Parse nested key-tree format into flattened dictionary"""
-    def clean_value(val):
-        if isinstance(val, str):
-            val = val.strip('"')
-            try:
-                if '.' in val:
-                    return float(val)
-                return int(val)
-            except ValueError:
-                return val
-        return val
+EXCEL_EPOCH = datetime(1899, 12, 30)  # Base date for Excel/Natus timestamps
 
-    def parse_node(text, prefix=''):
-        results = {}
-        pattern = r'\(\."([^"]+)"[,\s]+([^()]+)\)'
-        nested_pattern = r'\(\."([^"]+)"[\s,]+\((.*?)\)\)'
-        
-        # First find all nested structures
-        for match in re.finditer(nested_pattern, text, re.DOTALL):
-            key, nested_content = match.groups()
-            nested_key = f"{prefix}{key}_" if prefix else f"{key}_"
-            results.update(parse_node(nested_content, nested_key))
-            
-        # Then find simple key-value pairs
-        for match in re.finditer(pattern, text):
-            key, value = match.groups()
-            full_key = f"{prefix}{key}" if prefix else key
-            results[full_key] = clean_value(value.strip())
-            
-        return results
-
+def convert_excel_date(excel_time):
+    """Convert Excel-style floating point date to YYYY-MM-DD HH:MM:SS format safely."""
     try:
-        return parse_node(content)
-    except Exception as e:
-        print(f"Error parsing key-tree: {e}")
-        return {}
+        excel_time = float(excel_time)  # Ensure it's a float
+        
+        # Ensure the timestamp is within a reasonable range (Natus timestamps should be within 1800-2100)
+        if excel_time < 0 or excel_time > 80000:  # Approx 2199-12-31 in Excel format
+            return str(excel_time)  # Return as string if out of range
+
+        converted_time = EXCEL_EPOCH + timedelta(days=excel_time)
+        return converted_time.strftime("%Y-%m-%d %H:%M:%S")
+    
+    except (ValueError, TypeError, OverflowError):
+        return str(excel_time)  # Return as string if conversion fails
+
+def get_folder_stats(folder_path):
+    """Calculate folder size, number of files, and number of EEG files."""
+    folder = Path(folder_path)
+    total_size = sum(f.stat().st_size for f in folder.glob("**/*") if f.is_file())  # Total size in bytes
+    num_files = sum(1 for f in folder.glob("**/*") if f.is_file())  # Total number of files
+    num_eeg_files = sum(1 for f in folder.glob("**/*.eeg"))  # Number of .eeg files
+
+    return total_size, num_files, num_eeg_files
+
+def parse_metadata(content, parent_key=""):
+    """Extracts key-value pairs recursively from structured data."""
+    metadata = {}
+    
+    # Match keys dynamically, allowing for nested structures
+    pattern = r'\(\."([^"]+)"\s*,\s*(.*?)\)'
+
+    for match in re.finditer(pattern, content):
+        key, value = match.groups()
+        full_key = f"{parent_key}_{key}" if parent_key else key  # Handle nested keys
+
+        # Skip excessively large values (>1024 characters)
+        if len(value) > 1024:
+            continue
+
+        # Check if value contains another key-value structure (nested data)
+        if re.search(r'\(\."([^"]+)"\s*,', value):
+            sub_metadata = parse_metadata(value, full_key)
+            metadata.update(sub_metadata)
+        else:
+        # Convert timestamps stored as floats
+            if "timespan" in full_key.lower():    
+                pass
+            else:
+                if "Time" in full_key or "Date" in full_key or "Timestamp" in full_key:
+                    value = convert_excel_date(value)
+
+        metadata[full_key] = value.strip()
+
+    return metadata
 
 def extract_eeg_metadata(directory):
-    """Extract metadata from all .eeg files in directory"""
+    """Extract metadata from all .eeg files in directory."""
     all_metadata = []
-    
-    # Find all .eeg files
+
     for eeg_file in Path(directory).rglob('*.eeg'):
         try:
             # Read file content
             with open(eeg_file, 'rb') as f:
                 content = f.read().decode('utf-8', errors='ignore')
-            
-            # Extract key-tree structures
-            metadata = parse_key_tree(content)
-            metadata['source_file'] = str(eeg_file)
-            all_metadata.append(metadata)
-            
+
+            # Parse metadata recursively
+            metadata = parse_metadata(content)
+
+            # Extract essential fields
+            study_name = metadata.get("StudyName", "Unknown")
+            folder_name = eeg_file.parent.name
+            total_size, num_files, num_eeg_files = get_folder_stats(eeg_file.parent)  # Get folder stats
+
+            # Extract all duration fields (e.g., multiple timespans)
+            duration_keys = [k for k in metadata if "timespan" in k.lower() or "Duration" in k]
+            durations = {f"Duration_{i+1}": metadata[k] for i, k in enumerate(duration_keys)}
+
+            eeg_no = metadata.get("EegNo", "Unknown") 
+            machine = metadata.get("Machine", "Unknown")  
+
+            # Extract all timestamps and dates
+            date_keys = []
+            for k in metadata:
+                kk = k.lower()
+                if ("date" in kk) or ("time" in kk) or ("timestamp" in kk):
+                    date_keys.append(k)
+                    
+            print(date_keys)
+            date_metadata = {k: str(metadata[k]) for k in date_keys}  # Ensure all dates are strings
+
+            # Order DataFrame: StudyName, FolderName, Folder Stats, Durations, then others
+            ordered_metadata = {
+                "StudyName": study_name,
+                "FolderName": folder_name,
+                "FolderSize GB": total_size / (1024**3),  # Folder size in bytes
+                "NumFiles": num_files,  # Total number of files
+                "NumEEGFiles": num_eeg_files,  # Number of EEG files
+                "EegNo": eeg_no,
+                "Machine": machine
+            }
+            ordered_metadata.update(durations)  # Include all extracted duration fields
+            ordered_metadata.update(date_metadata)  # Insert extracted timestamps next
+            ordered_metadata.update(metadata)  # Append remaining metadata
+
+            ordered_metadata["source_file"] = str(eeg_file)  # Track source file
+            all_metadata.append(ordered_metadata)
+
         except Exception as e:
+            raise(e)
             print(f"Error processing {eeg_file}: {e}")
-    
+
     return all_metadata
 
 if __name__ == "__main__":
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Extract metadata from Natus EEG files")
-    parser.add_argument('input_dir', help="Directory containing .eeg files")
     parser.add_argument('-o', '--output', default='eeg_metadata.xlsx', help="Output Excel file")
-    
+    parser.add_argument('input_dir', help="Directory containing .eeg files")
+
     args = parser.parse_args()
-    
-    # Extract metadata
+
     print(f"Processing files in {args.input_dir}")
     metadata_list = extract_eeg_metadata(args.input_dir)
-    
+
     if metadata_list:
         # Convert to DataFrame
         df = pd.DataFrame(metadata_list)
-        
+
         # Save to Excel
         print(f"Saving to {args.output}")
         df.to_excel(args.output, index=False)
         print(f"Processed {len(metadata_list)} files")
-        print("\nExtracted fields:")
-        print("\n".join(sorted(df.columns)))
+        print("\nExtracted fields (ordered):")
+        print("\n".join(df.columns))
     else:
         print("No data found")

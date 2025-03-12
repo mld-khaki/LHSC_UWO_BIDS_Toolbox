@@ -9,7 +9,7 @@ import tempfile
 import shutil
 
 # only enable this option in windows machine
-rarfile.UNRAR_TOOL = r"c:\_code\=lhsc_lib\UnRAR.exe"
+rarfile.UNRAR_TOOL = "c:\\_Codes\\=lhsc_lib\\UnRAR.exe"
 # rarfile.UNRAR_TOOL = "f:\\ieeg_dataset_b\\code\\S03_incomplete_task_finder\\_lhsc_lib\\UnRAR.exe"
 
 
@@ -72,7 +72,6 @@ def process_archive(rar_path, edf_name, md5_checksum, folder_path, buffer_size=3
         if debug == 1:
             raise(e)
         logging.error(f"Error processing {rar_path}: {str(e)}")
-    os.remove(temp_dir + "/" + edf_name)
 
 def process_folder(folder_path,tmp_dir = temp_dir_org):
     for root, dirs, files in os.walk(folder_path):
@@ -118,12 +117,12 @@ def process_folder(folder_path,tmp_dir = temp_dir_org):
                     if debug == 1:
                         raise(e)
                     logging.error(f"Error in opening rar file: {rar_path}. {str(e)}. Skipping.")
+                    os.
                     raise(e)
                     continue
 
                 process_archive(rar_path, edf_file, md5_checksum, root,temp_dir = tmp_dir)
-                # try:
-                    # os.remove(rarfile.RarFile(rar_path))
+                
 
 def rar_checksum_eval(folder_to_process, tmp_dir):
     process_folder(folder_to_process, tmp_dir = tmp_dir)
