@@ -18,6 +18,7 @@ import io
 import traceback, sys
 import gzip
 from datetime import timedelta
+import pdb
 
 
 from ext_lib.edflibpy import EDFreader as EDFLIBReader
@@ -204,7 +205,8 @@ class edf2bids(QtCore.QRunnable):
                         'montage': 'Montage Event'
                         }
         remove_strings = []
-    
+        pdb.set_trace()  # Breakpoint inside thread
+
         tal_indx = [i for i,x in enumerate(self.header['chan_info']['ch_names']) if x.endswith('Annotations')][0]
 #         tal_indx = [i for i,x in enumerate(header['chan_info']['ch_names']) if x.endswith('Annotations')][0]
         
@@ -246,6 +248,8 @@ class edf2bids(QtCore.QRunnable):
         annotation_data.to_csv(self.annotation_fname, sep='\t', index=False, na_rep='n/a', float_format='%.3f')
     
     def copyLargeFile(self, src, dest, callback=None, buffer_size=65536*10, max_retries=3):
+        pdb.set_trace()  # Breakpoint inside thread
+        
         try:
             if not os.path.exists(src):
                 raise FileNotFoundError(f"The source file '{src}' does not exist.")
@@ -306,8 +310,8 @@ class edf2bids(QtCore.QRunnable):
                             next_update += update_interval
     
             # Clear progress line and print completion
-            print("\r" + " " * 80 + "\r", end='', flush=True)  # Clear the line
-            print(f"\rFile copy completed - {total_size:,} bytes transferred", flush=True)
+            # print("\r" + " " * 80 + "\r", end='', flush=True)  # Clear the line
+            print(f"\r\nFile copy completed - {total_size:,} bytes transferred", flush=True)
     
             if callback is not None:
                 callback.emit('100%')

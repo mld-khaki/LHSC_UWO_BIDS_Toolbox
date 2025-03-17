@@ -17,6 +17,9 @@ import qdarkstyle
 import gzip
 from PySide6 import QtGui, QtCore, QtWidgets
 
+sys.path.append(r"C:\_Code\S22_GitHub\LHSC_UWO_BIDS_Toolbox\data2bids")
+
+
 from widgets import gui_layout
 from widgets import settings_panel,about_panel,overwrite_type
 from edf2bids import edf2bids
