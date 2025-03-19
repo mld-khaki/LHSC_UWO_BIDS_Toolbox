@@ -201,7 +201,7 @@ def process_json(file_path, args, automaton, last_names, first_names, full_names
                 changed |= was_changed
             return new_list, changed
         elif isinstance(obj, str):
-            original_obj = obj
+            # original_obj = obj
             matches = find_matches(obj, automaton, last_names, first_names, full_names, reverse_full_names)
             for name in matches:
                 if prompt_user_for_replacement(obj, name, file_path):
@@ -229,6 +229,79 @@ def process_json(file_path, args, automaton, last_names, first_names, full_names
         print(" - No changes needed in JSON file.")
 
     return changed
+
+from functools import lru_cache
+
+def redact_names(text, names_to_redact, preserve_case=True, replacement_text=".X."):
+    """
+    Redacts names from text, prioritizing longer matches.
+    
+    Args:
+        text (str): The text to redact names from
+        names_to_redact (list): List of names to redact
+        preserve_case (bool): If True, preserves case of replacement (.X. for title case, .x. for lowercase)
+        replacement_text (str): Text to replace names with (default: ".X.")
+        
+    Returns:
+        str: The redacted text
+    """
+    # Build Aho-Corasick automaton for efficient string matching
+    automaton = ahocorasick.Automaton()
+    for name in names_to_redact:
+        if name and isinstance(name, str):
+            automaton.add_word(name.lower(), name)
+    automaton.make_automaton()
+    
+    # Find matches
+    all_matches = []
+    lower_text = text.lower()
+    
+    # Collect all matches with their positions
+    for end_index, original in automaton.iter(lower_text):
+        start_index = end_index - len(original) + 1
+        all_matches.append((start_index, end_index, original))
+    
+    # Sort matches by position and length (prioritize longer matches)
+    all_matches.sort(key=lambda x: (x[0], -x[1]))
+    
+    # Filter out overlapping matches, keeping longer ones
+    filtered_matches = []
+    if all_matches:
+        current_match = all_matches[0]
+        filtered_matches.append(current_match)
+        
+        for match in all_matches[1:]:
+            # If this match starts after the current one ends, it's non-overlapping
+            if match[0] > current_match[1]:
+                current_match = match
+                filtered_matches.append(match)
+            # If this is a longer match at the same starting position, replace the current one
+            elif match[0] == current_match[0] and match[1] > current_match[1]:
+                filtered_matches.pop()  # Remove the previous shorter match
+                filtered_matches.append(match)
+                current_match = match
+    
+    # No matches found, return original text
+    if not filtered_matches:
+        return text
+    
+    # Apply replacements from end to start to avoid offset issues
+    result = text
+    for start_idx, end_idx, original in sorted(filtered_matches, key=lambda x: -x[0]):
+        match_in_original_text = result[start_idx:end_idx+1]
+        if preserve_case:
+            replacement = replacement_text if match_in_original_text[0].isupper() else replacement_text.lower()
+        else:
+            replacement = replacement_text
+        result = result[:start_idx] + replacement + result[end_idx+1:]
+    
+    return result
+
+# Example usage:
+# names = ["John Smith", "Jane Doe", "Smith", "J Smith"]
+# text = "John Smith and Jane Doe were discussing with Smith and J Smith."
+# redacted = redact_names(text, names)
+# print(redacted)
 
 def search_and_process_files(args, automaton, last_names, first_names, full_names, reverse_full_names):
     """Search for files and process them."""
