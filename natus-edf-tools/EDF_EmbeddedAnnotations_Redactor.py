@@ -648,7 +648,10 @@ def verify_edf_signals(input_path, output_path):
         
         # Get signal information
         signal_count = original_edf.getNumSignals()
-        signal_labels = original_edf.getSignalLabels()
+        
+        signal_labels = []
+        for qCtr in range(signal_count):
+            signal_labels.append(original_edf.getSignalLabel(qCtr))
         
         logger.info(f"Found {signal_count} signals to verify")
         
@@ -675,7 +678,7 @@ def verify_edf_signals(input_path, output_path):
             logger.info(f"Verifying signal: {signal_name} (index {signal_idx})")
             
             # Read the entire signal from both files
-            samples_per_record = original_edf.getSamplesPerRecordPerSignal()[signal_idx]
+            samples_per_record = original_edf.getSampelsPerDataRecord(signal_idx)
             total_samples = samples_per_record * data_records
             
             logger.debug(f"  Signal has {samples_per_record} samples per record, {total_samples} total samples")
@@ -692,8 +695,9 @@ def verify_edf_signals(input_path, output_path):
                 
                 # Read chunks from both files
                 logger.debug(f"  Reading chunk at offset {offset} (size {actual_chunk} samples)")
-                original_data = original_edf.readSignal(signal_idx, offset, actual_chunk)
-                anon_data = anon_edf.readSignal(signal_idx, offset, actual_chunk)
+                # original_edf.fseek(signal_idx, offset, EDFreader.EDFSEEK_SET)
+                original_edf.readSamples(signal_idx, original_data, offset, actual_chunk)
+                anon_data = anon_edf.readSamples(signal_idx, offset, actual_chunk)
                 
                 # Compare the data
                 if not np.array_equal(original_data, anon_data):
@@ -804,6 +808,7 @@ def verify_edf_signals(input_path, output_path):
         return success, results
         
     except Exception as e:
+        raise(e)
         import traceback
         error_details = traceback.format_exc()
         logger.error(f"Error during signal verification: {e}")
