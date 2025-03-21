@@ -648,10 +648,9 @@ def verify_edf_signals(input_path, output_path):
         
         # Get signal information
         signal_count = original_edf.getNumSignals()
-        
         signal_labels = []
-        for qCtr in range(signal_count):
-            signal_labels.append(original_edf.getSignalLabel(qCtr))
+        for s in range(signal_count):
+            signal_labels.append(original_edf.getSignalLabel(s))
         
         logger.info(f"Found {signal_count} signals to verify")
         
@@ -693,11 +692,32 @@ def verify_edf_signals(input_path, output_path):
             for offset in range(0, total_samples, chunk_size):
                 actual_chunk = min(chunk_size, total_samples - offset)
                 
-                # Read chunks from both files
+                # Read chunks from both files using the correct method signature
+                # Looking at EDFreader.py, the readSamples method requires:
+                # - signal number (s)
+                # - buffer (numpy array) 
+                # - number of samples to read (n)
                 logger.debug(f"  Reading chunk at offset {offset} (size {actual_chunk} samples)")
-                # original_edf.fseek(signal_idx, offset, EDFreader.EDFSEEK_SET)
-                original_edf.readSamples(signal_idx, original_data, offset, actual_chunk)
-                anon_data = anon_edf.readSamples(signal_idx, offset, actual_chunk)
+                
+                # Create buffers for the original and anonymized data
+                original_data = np.zeros(actual_chunk, dtype=np.float64)
+                anon_data = np.zeros(actual_chunk, dtype=np.float64)
+                
+                # Set the file position
+                original_edf.fseek(signal_idx, offset, original_edf.EDFSEEK_SET)
+                anon_edf.fseek(signal_idx, offset, anon_edf.EDFSEEK_SET)
+                
+                # Read the samples into the buffers
+                samples_read_orig = original_edf.readSamples(signal_idx, original_data, actual_chunk)
+                samples_read_anon = anon_edf.readSamples(signal_idx, anon_data, actual_chunk)
+                
+                # Check if we got the expected number of samples
+                if samples_read_orig != actual_chunk or samples_read_anon != actual_chunk:
+                    logger.warning(f"  Failed to read expected number of samples: "
+                                 f"Original={samples_read_orig}, "
+                                 f"Anonymized={samples_read_anon}, "
+                                 f"Expected={actual_chunk}")
+                    continue
                 
                 # Compare the data
                 if not np.array_equal(original_data, anon_data):
@@ -808,14 +828,14 @@ def verify_edf_signals(input_path, output_path):
         return success, results
         
     except Exception as e:
-        raise(e)
         import traceback
         error_details = traceback.format_exc()
         logger.error(f"Error during signal verification: {e}")
         logger.error(error_details)
         results['error_details'] = str(e)
         return False, results
-
+    
+    
 def run_verification(input_path, output_path):
     """
     Run a comprehensive verification of the anonymized EDF file.
@@ -923,10 +943,10 @@ if __name__ == "__main__":
                 
                 if verification_result:
                     logger.info(f"✅ Thorough verification PASSED in {verify_elapsed:.2f} seconds")
-                    print(f"✅ Anonymization and verification successful")
+                    print("✅ Anonymization and verification successful")
                 else:
                     logger.error(f"❌ Thorough verification FAILED in {verify_elapsed:.2f} seconds")
-                    print(f"❌ Anonymization succeeded but verification failed - check logs for details")
+                    print("❌ Anonymization succeeded but verification failed - check logs for details")
             else:
                 # Just do basic validation
                 verification_result = validate_anonymized_file(args.input_path, args.output_path)
@@ -934,14 +954,14 @@ if __name__ == "__main__":
                 
                 if verification_result:
                     logger.info(f"✅ Basic validation PASSED in {verify_elapsed:.2f} seconds")
-                    print(f"✅ Anonymization and basic validation successful")
+                    print("✅ Anonymization and basic validation successful")
                 else:
                     logger.error(f"❌ Basic validation FAILED in {verify_elapsed:.2f} seconds")
-                    print(f"❌ Anonymization succeeded but validation failed - check logs for details")
+                    print("❌ Anonymization succeeded but validation failed - check logs for details")
         else:
             logger.info("Skipping verification (use --verify to verify signals)")
-            print(f"✅ Anonymization completed successfully (no verification requested)")
+            print("✅ Anonymization completed successfully (no verification requested)")
     else:
         logger.error("Anonymization failed")
-        print(f"❌ Anonymization failed - check logs for details")
+        print("❌ Anonymization failed - check logs for details")
         sys.exit(1)
