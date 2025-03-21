@@ -7,3 +7,10 @@
 2025-03-21 13:47:09,034 - root - INFO - edflibpy available - full annotation checking enabled
 2025-03-21 13:47:09,037 - edf_scanner - INFO - Starting scan of directory: y:\ieeg_dataset_c\bids\sub-157\
 2025-03-21 13:47:09,126 - edf_scanner - INFO - Found 41 EDF files to process
+2025-03-21 17:19:49,645 - edf_scanner - INFO - Scanning completed in 12760.52 seconds
+2025-03-21 17:19:49,647 - edf_scanner - INFO - Scan results: 41 files processed
+2025-03-21 17:19:49,648 - edf_scanner - INFO - - 41 anonymized
+2025-03-21 17:19:49,648 - edf_scanner - INFO - - 0 non-anonymized
+2025-03-21 17:19:49,648 - edf_scanner - INFO - - 0 errors
+2025-03-21 17:19:49,649 - edf_scanner - INFO - Report of 0 issues saved to: non_anonymized_edf_files.csv
+2025-03-21 17:19:49,649 - root - INFO - Scan completed successfully

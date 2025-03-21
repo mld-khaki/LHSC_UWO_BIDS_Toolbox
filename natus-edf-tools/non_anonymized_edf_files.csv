@@ -1,1 +1,1 @@
-file_path,anonymized,reason,patient_info,file_size,error
+file_path,anonymized,header_anonymized,annotations_anonymized,issue_type,issue_details,patient_info,file_size

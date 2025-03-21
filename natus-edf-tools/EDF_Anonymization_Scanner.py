@@ -426,6 +426,7 @@ def scan_directory(directory, output_csv, check_annotations=True, max_workers=4)
                     if not result['anonymized'] and not result['error']:
                         non_anonymized_count += 1
                         logger.warning(f"Non-anonymized file: {file_path}")
+                        print(f"Non-anonymized file: {file_path}",flush=True)
                         for issue in result['issues']:
                             logger.warning(f"  - {issue['type']}: {issue['reason']}")
                     
