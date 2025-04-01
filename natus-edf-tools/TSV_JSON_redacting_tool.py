@@ -28,7 +28,8 @@ ignore_list = ["obscur", "please", "clean", "leans", "polyspik", "adjustin", "ag
 
 def load_names_from_excel(excel_path):
     """Load names from an Excel file and generate variations."""
-    df = pd.read_excel(excel_path, usecols=["LastName", "FirstName"], dtype=str)
+    #df = pd.read_excel(excel_path, usecols=["LastName", "FirstName"], dtype=str)
+    df = pd.read_csv(excel_path, usecols=["LastName", "FirstName"], dtype=str)
     df.dropna(subset=["LastName", "FirstName"], inplace=True)
 
     last_names = set(df["LastName"].str.strip().tolist())

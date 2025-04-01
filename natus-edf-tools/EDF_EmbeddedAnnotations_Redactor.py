@@ -299,7 +299,7 @@ def anonymize_edf_header(header_bytes):
     logger.info(f"Anonymized patient field to: 'X X X X'")
     return new_header
 
-def anonymize_edf_complete(input_path, output_path, buffer_size_mb=64):
+def anonymize_edf_complete(input_path, output_path, buffer_size_mb=64, redaction_patterns = [], log_dir = ""):
     """
     Complete EDF anonymizer that ensures exact file size matching and properly handles annotations.
     
@@ -322,7 +322,11 @@ def anonymize_edf_complete(input_path, output_path, buffer_size_mb=64):
     start_time = time.time()
     edf_reader = None
     
-    logger = logging.getLogger('edf_anonymizer')
+    if log_dir != "":
+        logger = setup_logging(log_dir)
+    else:
+        logger = logging.getLogger('edf_anonymizer')
+
     logger.info(f"Starting anonymization of: {input_path}")
     logger.info(f"Output will be saved to: {output_path}")
     logger.info(f"Using buffer size of {buffer_size_mb} MB")
@@ -376,7 +380,6 @@ def anonymize_edf_complete(input_path, output_path, buffer_size_mb=64):
             logger.info(f"Data record size: {record_size} bytes")
 
             # Extract patient info for redaction
-            redaction_patterns = []
             try:
                 # Extract directly from header
                 logger.debug("Extracting patient info from header for redaction")
