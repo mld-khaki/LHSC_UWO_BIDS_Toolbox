@@ -5,82 +5,107 @@ import os
 import re
 import json
 import datetime
+from datetime import datetime
 
 # Define tools and arguments
 tools = {
     "Arg_Parser": {
         "usage": "Arg_Parser.py <python_file> [output_file]",
-        "args": [
-            "python_file (File)",
-            "output_file (Optional) (File)"
-        ],
-        "arg_name": [
-            "",
-            ""
-        ]
+        "args": ["python_file (File)","output_file (Optional) (File)"],
+        "arg_name": ["",""]
     },
     "EDF_dir_scanner": {
         "usage": "EDF_dir_scanner.py [-h] [--output OUTPUT] folder",
         "args": ["--output (File)", "folder (Folder)"],
         "arg_name": ["--output", ""]
     },
-    "TSV_JSON_redacting_tool": {
+    "redactor_TSV_JSON": {
         "usage": "TSV_JSON_redacting_tool.py [-h] excel_path folder_path",
         "args": ["excel_path (File)", "folder_path (Folder)"],
-        "arg_name": ["--output", ""]
+        "arg_name": ["", ""]
     },
     "Natus_InfoExtractor": {
         "usage": "Natus_InfoExtractor.py [-h] [-o OUTPUT] input_dir",
         "args": ["-o OUTPUT (File)", "input_dir (Folder)"],
-        "arg_name": ["--output", ""]
+        "arg_name": ["-o", ""]
     },
     "NatusExportList_Generator": {
         "usage": "python script.py <main_folder> <output_file> [constant_path]",
         "args": ["main_folder (Folder)", "output_file (File)", "constant_path (Optional File)"],
-        "arg_name": ["--output", ""]        
-    },
-    "FolderAnalysis": {
-        "usage": "(placeholder for now)",
-        "args": [],
-        "arg_name": ["--output", ""]        
+        "arg_name": ["", "", ""]        
     },
     "TSV_Participant_Merger": {
         "usage": "TSV_Participant_Merger.py [-h] file1 file2 output_file",
         "args": ["file1 (File)", "file2 (File)", "output_file (File)"],
-        "arg_name": ["--output", ""]        
+        "arg_name": ["", "", ""]        
     },
     "EDF_RAR_archive_purger": {
         "usage": "EDF_RAR_archive_purger.py [-h] <folder> output_file",
         "args": ["search_folder (Folder)", "out_log_file (File)"],
         "arg_name": ["", ""]        
     },
-    "TextList_Folder_Comparison": {
-        "usage": "TextList_Folder_Comparison.py (No usage information available)",
-        "args": [],
-        "arg_name": []
-    },
-    "TextList_Folder_Comparison": {
+    "comparison__TextList_Folder": {
         "usage": "TextList_Folder_Comparison.py folder txtfile",
+        "args": ["folder (Folder)","txtfile (File)"],
+        "arg_name": ["",""]
+    },
+    "EDF_Anonymization_Scanner": {
+        "usage": "EDF_Anonymization_Scanner.py directory [--output] [--log_dir] [--log_level] [--max_workers] [--skip_annotations]",
         "args": [
-            "folder (Folder)",
-            "txtfile (File)"
+            "directory (File)",
+            "--output (File)",
+            "--log_dir (File)",
+            "--log_level (File)",
+            "--max_workers (File)",
+            "--skip_annotations (File)"
         ],
-        "arg_name": [
-            "",
-            ""
-        ]
+        "arg_name": ["",
+            "--output",
+            "--log_dir",
+            "--log_level",
+            "--max_workers",
+            "--skip_annotations"]
+    },
+    "comparison_two_massive_files": {
+        "usage": "python compare_files_visual.py <file1> <file2>",
+        "args": ["python (File)","file1 (File)","file2 (File)"],
+        "arg_name": ["","",""]},
+        
+    "Server_update_check": {
+        "usage": "Server_update_check.py inpA inpB [--output] [--ignore_ext]",
+        "args": ["inpA (Folder)","inpB (Folder)","--output (File)","--ignore_ext (File)"],
+        "arg_name": ["","","--output","--ignore_ext"]
     }    
 }
 
 
-# GUI Layout
+# GUI Layout with fixed inputs for all possible arguments
+# We'll hide/show them based on the selected tool
+max_args = max([len(tool["args"]) for tool in tools.values()])
+dynamic_inputs = []
+
+for i in range(max_args):
+    row = [
+        sg.Text("", size=(20, 1), key=f"ARG_LABEL_{i}", visible=False),
+        sg.Input(key=f"ARG_INPUT_{i}", visible=False, size=(30, 1), enable_events=True),
+        sg.FileBrowse(key=f"ARG_BROWSE_{i}", visible=False, target=f"ARG_INPUT_{i}"),
+        sg.FolderBrowse(key=f"ARG_FOLDER_{i}", visible=False, target=f"ARG_INPUT_{i}"),
+        sg.FileSaveAs(key=f"ARG_SAVE_{i}", visible=False, target=f"ARG_INPUT_{i}")
+    ]
+    dynamic_inputs.append(row)
+
+# Main GUI Layout
+
+tools = dict(sorted(tools.items()))
+list_main = list(tools.keys())
+print(list_main)
 layout = [
     [sg.Text("Select a tool:")],
-    [sg.Listbox(values=list(tools.keys()), size=(40, 6), key="TOOL", enable_events=True)],
+    [sg.Listbox(values=list_main, size=(40, 6), key="TOOL", enable_events=True)],
     [sg.Text("Arguments:"), sg.Button("Show Help", key="HELP")],
     [sg.Multiline("", size=(60, 4), key="ARGS", disabled=True)],
     [sg.Text("Select files and folders based on required arguments:")],
-    [sg.Column([], key="DYNAMIC_INPUTS")],
+    *dynamic_inputs,
     [sg.Text("Generated Command:")],
     [sg.Multiline("", size=(60, 3), key="COMMAND_PREVIEW", disabled=True)],
     [sg.Checkbox("Save output with configuration", key="SAVE_OUTPUT_WITH_CONFIG", default=False)],
@@ -91,7 +116,7 @@ layout = [
 ]
 
 # Create window
-window = sg.Window("Generalized Script Launcher", layout)
+window = sg.Window("Generalized Script Launcher", layout, finalize=True)
 
 def determine_arg_properties(arg_str):
     """Determine the properties of an argument based on its string representation."""
@@ -119,59 +144,40 @@ def determine_arg_properties(arg_str):
     
     return arg_name, arg_type, is_output, is_optional
 
-def get_appropriate_file_button(arg_name, arg_type, is_output):
-    """Get the appropriate file button based on argument properties."""
-    if "(Folder)" in arg_type:
-        return sg.FolderBrowse(button_text="Select Folder")
-    
-    if is_output:
-        return sg.FileSaveAs(button_text="Save As...")
-    else:
-        # For input files, we can customize based on patterns
-        file_types = []
-        
-        # Add appropriate file types based on argument name
-        if "excel" in arg_name.lower() or "xlsx" in arg_name.lower() or "xls" in arg_name.lower():
-            file_types.append(("Excel Files", "*.xlsx;*.xls"))
-        elif "csv" in arg_name.lower() or "tsv" in arg_name.lower():
-            file_types.append(("CSV/TSV Files", "*.csv;*.tsv"))
-        elif "json" in arg_name.lower():
-            file_types.append(("JSON Files", "*.json"))
-        elif "python" in arg_name.lower() or "py" in arg_name.lower():
-            file_types.append(("Python Files", "*.py"))
-        elif "edf" in arg_name.lower():
-            file_types.append(("EDF Files", "*.edf"))
-        elif "txt" in arg_name.lower():
-            file_types.append(("Text Files", "*.txt"))
-        
-        # Always include All Files option
-        file_types.append(("All Files", "*.*"))
-        
-        return sg.FileBrowse(button_text="Browse...", file_types=file_types)
-
 def update_dynamic_inputs(tool_name):
-    """Dynamically update the input fields based on the selected tool."""
-    window["DYNAMIC_INPUTS"].update(visible=False)
-    inputs = []
-    for arg in tools[tool_name]["args"]:
+    """Dynamically show/hide input fields based on the selected tool."""
+    # Hide all input elements first
+    for i in range(max_args):
+        window[f"ARG_LABEL_{i}"].update(visible=False)
+        window[f"ARG_INPUT_{i}"].update(visible=False, value="")
+        window[f"ARG_BROWSE_{i}"].update(visible=False)
+        window[f"ARG_FOLDER_{i}"].update(visible=False)
+        window[f"ARG_SAVE_{i}"].update(visible=False)
+    
+    # Show only needed input elements
+    for i, arg in enumerate(tools[tool_name]["args"]):
         arg_name, arg_type, is_output, is_optional = determine_arg_properties(arg)
         
         # Create appropriate label with optional indicator if needed
         label_text = f"{arg_name}{' (Optional)' if is_optional else ''}"
+        window[f"ARG_LABEL_{i}"].update(visible=True, value=label_text)
+        window[f"ARG_INPUT_{i}"].update(visible=True)
         
-        # Get the appropriate button for this argument type
-        file_button = get_appropriate_file_button(arg_name, arg_type, is_output)
-        
-        # Create the input element
-        inputs.append([sg.Text(label_text), sg.Input(key=arg_name, enable_events=True), file_button])
+        # Show the appropriate browse button
+        if "(Folder)" in arg_type:
+            window[f"ARG_FOLDER_{i}"].update(visible=True)
+        elif is_output:
+            window[f"ARG_SAVE_{i}"].update(visible=True)
+        else:
+            window[f"ARG_BROWSE_{i}"].update(visible=True)
     
-    window.extend_layout(window["DYNAMIC_INPUTS"], inputs)
-    window["DYNAMIC_INPUTS"].update(visible=True)
+    # Initialize command preview with empty values
+    arg_values = {}
+    for i in range(len(tools[tool_name]["args"])):
+        arg_values[f"ARG_INPUT_{i}"] = ""
     
-    # Initialize command preview
-    update_command_preview(tool_name, {})
+    update_command_preview(tool_name, arg_values)
 
-# Function to save output to a file
 def save_output_to_file(output_text, suggested_filename=None):
     """Save the console output to a text file."""
     try:
@@ -200,7 +206,6 @@ def save_output_to_file(output_text, suggested_filename=None):
         sg.popup_error(f"Error saving output: {str(e)}")
         return None
 
-# Function to save configuration
 def save_configuration(values, output_text=None):
     """Save the current tool configuration to a JSON file."""
     try:
@@ -221,10 +226,11 @@ def save_configuration(values, output_text=None):
         
         # Get all the argument values for the selected tool
         if tool in tools:
-            for arg in tools[tool]["args"]:
+            for i, arg in enumerate(tools[tool]["args"]):
                 arg_name, _, _, _ = determine_arg_properties(arg)
-                if arg_name in values:
-                    config["arguments"][arg_name] = values[arg_name]
+                input_key = f"ARG_INPUT_{i}"
+                if input_key in values:
+                    config["arguments"][i] = values[input_key]
         
         # Include output if requested
         if values.get("SAVE_OUTPUT_WITH_CONFIG", False) and output_text:
@@ -252,7 +258,6 @@ def save_configuration(values, output_text=None):
         sg.popup_error(f"Error saving configuration: {str(e)}")
         return None
 
-# Function to load configuration
 def load_configuration():
     """Load a previously saved configuration."""
     try:
@@ -271,7 +276,7 @@ def load_configuration():
     except Exception as e:
         sg.popup_error(f"Error loading configuration: {str(e)}")
         return None
-        
+
 def update_command_preview(tool, values):
     """Update the command preview box with the current command."""
     if not tool:
@@ -280,14 +285,22 @@ def update_command_preview(tool, values):
     
     # Build arguments list
     args = []
-    for cnt in range(len(tools[tool]["args"])):
-        arg_tmp = tools[tool]["args"][cnt]
-        arg_val = tools[tool]["arg_name"][cnt]
+    
+    # Make sure we don't exceed the length of the arg_name list
+    for i in range(len(tools[tool]["args"])):
+        arg_tmp = tools[tool]["args"][i]
         arg_name, _, _, _ = determine_arg_properties(arg_tmp)
-        if arg_name in values and values[arg_name]:
-            if arg_val != "":
+        input_key = f"ARG_INPUT_{i}"
+        
+        # Check if we have the corresponding arg_name (handles case where arg_name list is shorter)
+        arg_val = ""
+        if i < len(tools[tool]["arg_name"]):
+            arg_val = tools[tool]["arg_name"][i]
+        
+        if input_key in values and values[input_key]:
+            if arg_val:
                 args.append(arg_val)
-            args.append(values[arg_name])
+            args.append(values[input_key])
     
     # Construct the command
     script_path = f"./{tool}.py"
@@ -299,7 +312,6 @@ def update_command_preview(tool, values):
     window["COMMAND_PREVIEW"].update(cmd_string)
     window["COPY_COMMAND"].update(disabled=False)
 
-# Function to apply loaded configuration
 def apply_configuration(config, window):
     """Apply a loaded configuration to the UI."""
     try:
@@ -318,9 +330,10 @@ def apply_configuration(config, window):
         
         # Apply the saved argument values
         arguments = config.get("arguments", {})
-        for arg_name, arg_value in arguments.items():
-            if arg_name in window.AllKeysDict:
-                window[arg_name].update(arg_value)
+        for i, value in arguments.items():
+            input_key = f"ARG_INPUT_{int(i)}"
+            if input_key in window.AllKeysDict:
+                window[input_key].update(value)
                 
         # Set the save output checkbox
         if "save_output_with_config" in config:
@@ -330,6 +343,10 @@ def apply_configuration(config, window):
         if "output" in config and config["output"]:
             window["OUTPUT"].update(config["output"])
             window["SAVE_OUTPUT"].update(disabled=False)
+            
+        # Update command preview with the current values
+        current_values = window.read(timeout=0)[1]
+        update_command_preview(tool, current_values)
             
         # Show configuration timestamp if available
         if "timestamp" in config:
@@ -350,12 +367,14 @@ def apply_configuration(config, window):
 # Event Loop
 while True:
     event, values = window.read()
+    
     if event in (sg.WINDOW_CLOSED, "Exit"):
         break
     elif event == "TOOL":
         selected_tool = values["TOOL"][0] if values["TOOL"] else ""
         window["ARGS"].update(tools.get(selected_tool, {}).get("usage", ""))
-        update_dynamic_inputs(selected_tool)
+        if selected_tool:
+            update_dynamic_inputs(selected_tool)
     elif event == "HELP":
         selected_tool = values["TOOL"][0] if values["TOOL"] else ""
         if selected_tool:
@@ -384,14 +403,20 @@ while True:
         tool = values["TOOL"][0] if values["TOOL"] else None
         if tool:
             args = []
-            for cnt in range(len(tools[tool]["args"])):
-                arg_tmp = tools[tool]["args"][cnt]
-                arg_val = tools[tool]["arg_name"][cnt]
+            for i in range(len(tools[tool]["args"])):
+                arg_tmp = tools[tool]["args"][i]
                 arg_name, _, _, _ = determine_arg_properties(arg_tmp)
-                if values.get(arg_name):
-                    if arg_val != "":
+                input_key = f"ARG_INPUT_{i}"
+                
+                # Check if we have the corresponding arg_name (handles case where arg_name list is shorter)
+                arg_val = ""
+                if i < len(tools[tool]["arg_name"]):
+                    arg_val = tools[tool]["arg_name"][i]
+                
+                if input_key in values and values[input_key]:
+                    if arg_val:
                         args.append(arg_val)
-                    args.append(values[arg_name])
+                    args.append(values[input_key])
             
             # Run selected script with arguments
             script_path = f"./{tool}.py"  # Adjust if scripts are in a different directory
@@ -440,7 +465,7 @@ while True:
         else:
             sg.popup("Error", "Please select a tool before running.")
     # Update command preview whenever an input changes
-    elif event in values and isinstance(window[event], sg.Input):
+    elif event.startswith("ARG_INPUT_"):
         selected_tool = values["TOOL"][0] if values["TOOL"] else None
         if selected_tool:
             update_command_preview(selected_tool, values)
