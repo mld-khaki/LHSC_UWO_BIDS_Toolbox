@@ -1,0 +1,71 @@
+## NatusExportList_Generator_Flexible
+# Author: Dr. Milad Khaki
+# Date: 2025-04-09
+# Description: This script generates an EEG file list with a constant path either by scanning a directory or reading folder names from a file.
+# Usage: python NatusExportList_Generator_Flexible.py [--main_folder <main_folder>] [--folder_list <folder_list_file>] --output <output_file> [--constant_path <path>]
+# License: MIT License
+
+import os
+import re
+import sys
+import argparse
+
+def is_valid_folder_name(name):
+    """Check if folder name matches required pattern."""
+    pattern = re.compile(r"^[^\\/]*~[^\\/]*_[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*$")
+    return bool(pattern.match(name))
+
+def generate_list_from_folder(main_folder):
+    """List all matching folder names in a directory."""
+    return [
+        folder for folder in os.listdir(main_folder)
+        if os.path.isdir(os.path.join(main_folder, folder)) and is_valid_folder_name(folder)
+    ]
+
+def generate_text_file(main_folder, folder_names, output_file, constant_path):
+    """
+    Generate output file by checking for .eeg files in provided folder names.
+
+    Args:
+        main_folder (str): Root path to find folders.
+        folder_names (list): List of folder names to check.
+        output_file (str): Output .txt file path.
+        constant_path (str): Constant path to append.
+    """
+    with open(output_file, 'w') as of:
+        for folder in folder_names:
+            folder_path = os.path.join(main_folder, folder)
+            eeg_file = os.path.join(folder_path, f"{folder}.eeg")
+            if os.path.isdir(folder_path) and os.path.isfile(eeg_file):
+                of.write(f"{eeg_file}, {constant_path}\n")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate EEG export list from folder or list file.")
+    parser.add_argument('--main_folder', type=str, help="Main folder path containing subdirectories")
+    parser.add_argument('--folder_list', type=str, help="Text file with folder names (one per line)")
+    parser.add_argument('--output', required=True, type=str, help="Output text file")
+    parser.add_argument('--constant_path', type=str, default="D:\\Neuroworks\\Settings\\D:\\Neuroworks\\Settings\\quant_new_256_with_photic.exp", help="Constant path to append")
+
+    args = parser.parse_args()
+
+    if not args.main_folder and not args.folder_list:
+        print("Error: You must provide at least one of --main_folder or --folder_list.")
+        sys.exit(1)
+
+    try:
+        if args.folder_list:
+            if not args.main_folder:
+                raise ValueError("You must specify --main_folder to resolve folder paths from --folder_list.")
+            if not os.path.isfile(args.folder_list):
+                raise FileNotFoundError(f"Folder list file not found: {args.folder_list}")
+            with open(args.folder_list, 'r') as f:
+                folder_names = [line.strip() for line in f if line.strip()]
+        else:
+            folder_names = generate_list_from_folder(args.main_folder)
+
+        generate_text_file(args.main_folder, folder_names, args.output, args.constant_path)
+        print(f"Output file generated: {args.output}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)

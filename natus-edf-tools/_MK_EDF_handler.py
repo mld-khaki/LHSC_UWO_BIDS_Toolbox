@@ -24,6 +24,13 @@ for i in range(max_args):
     ]
     dynamic_inputs.append(row)
 
+# Get screen resolution of primary monitor
+screen_width = 1200 #, screen_height = sg.Window.get_screen_size()
+window_width = 500
+# Calculate centered position
+x_left = (screen_width - window_width) // 2
+print(screen_width,x_left)
+
 # Main GUI Layout
 
 tools = dict(sorted(tools.items()))
@@ -31,22 +38,30 @@ list_main = list(tools.keys())
 print(list_main)
 layout = [
     [sg.Text("Select a tool:")],
-    [sg.Listbox(values=list_main, size=(40, 6), key="TOOL", enable_events=True)],
-    [sg.Text("Arguments:"), sg.Button("Show Help", key="HELP")],
-    [sg.Multiline("", size=(60, 4), key="ARGS", disabled=True)],
+    [sg.Listbox(values=list_main, size=(60, 6), key="TOOL", enable_events=True,expand_x=True),
+        sg.Column([
+                [sg.Button("Show Help", key="HELP")], 
+                [sg.Button("Refresh Arg List", key="REFRESH")],
+                [sg.Button("Exit")],
+                [sg.Checkbox("Save output with conf.", key="SAVE_OUTPUT_WITH_CONFIG", default=False)]
+        ])],
+    [],
+    [sg.Text("Arguments:"),sg.Multiline("", size=(60, 4), key="ARGS", disabled=True,expand_x=True)],
     [sg.Text("Select files and folders based on required arguments:")],
     *dynamic_inputs,
     [sg.Text("Generated Command:")],
-    [sg.Multiline("", size=(60, 3), key="COMMAND_PREVIEW", disabled=True)],
-    [sg.Checkbox("Save output with configuration", key="SAVE_OUTPUT_WITH_CONFIG", default=False)],
+    [sg.Multiline("", size=(60, 3), key="COMMAND_PREVIEW", disabled=True,expand_x=True, font=('Courier New', 8))],
     [sg.Button("Run"), sg.Button("Save Output", key="SAVE_OUTPUT", disabled=True), 
      sg.Button("Save Config", key="SAVE_CONFIG"), sg.Button("Load Config", key="LOAD_CONFIG"), 
-     sg.Button("Copy Command", key="COPY_COMMAND"), sg.Button("Exit")],
-    [sg.Multiline(size=(60, 10), key="OUTPUT", autoscroll=True, disabled=True)]
-]
+     sg.Button("Copy Command", key="COPY_COMMAND")],
+    [sg.Multiline(size=(100, 15), key="OUTPUT", autoscroll=True, disabled=True,expand_x=True, font=('Courier New', 8))]
+,]
 
 # Create window
-window = sg.Window("Generalized Script Launcher", layout, finalize=True)
+window = sg.Window("Generalized Script Launcher", layout, finalize=True,
+    resizable=True,
+    location=(400,0)
+    )
 
 def determine_arg_properties(arg_str):
     """Determine the properties of an argument based on its string representation."""
@@ -309,6 +324,10 @@ while True:
         selected_tool = values["TOOL"][0] if values["TOOL"] else ""
         if selected_tool:
             sg.popup("Usage Help", tools[selected_tool]["usage"])
+    elif event == "REFRESH":
+        tools = dict(sorted(tools.items()))
+        list_main = list(tools.keys())
+        sg.popup("Updated Tools")
     elif event == "SAVE_OUTPUT":
         output_text = window["OUTPUT"].get()
         if output_text.strip():

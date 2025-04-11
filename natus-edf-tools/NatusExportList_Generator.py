@@ -1,56 +1,81 @@
-## NatusExportList_Generator
+## NatusExportList_Generator_FromList
 # Author: Dr. Milad Khaki
-# Date: 2025-02-21
-# Description: This script scans a main folder for EEG subdirectories matching a specific pattern and generates a text file listing valid EEG files with a constant path.
-# Usage: python NatusExportList_Generator.py <main_folder> <output_file> [constant_path]
+# Date: 2025-04-09
+# Description: This script reads folder names from an input .txt file and checks if valid EEG files exist within a specified main folder. 
+#              If matching EEG files are found, it generates a list with a constant path in an output file.
+# Usage: python NatusExportList_Generator_FromList.py --main_folder <path> --folder_list <file.txt> --output <output.txt> [--constant_path <path>]
 # License: MIT License
 
 import os
 import re
-import sys
+import argparse
 
-def generate_text_file(main_folder, output_file, constant_path):
+
+
+def generate_text_file_from_list(main_folder, folder_list_file, output_file, constant_path):
     """
-    Scans the given main folder for subdirectories matching the pattern containing:
-    - One '~'
-    - One '_'
-    - Four '-'
-    
-    If a matching subdirectory contains a file with the same name and '.eeg' extension, 
-    it writes the file path along with a constant path to the output file.
-    
-    Args:
-        main_folder (str): Path to the main folder containing subdirectories.
-        output_file (str): Path to the output text file.
-        constant_path (str): Constant path to append in each line of the output file.
+    Reads folder names from a text file, checks if each folder exists in main_folder,
+    matches naming pattern, and if the corresponding .eeg file exists, writes the path
+    to output file along with a constant path.
     """
+    main_folder = main_folder if main_folder != None else ""
+    folder_list_file = folder_list_file if folder_list_file != None else ""
+        
+    Folder_available = False
+    if os.path.exists(main_folder) and os.path.isdir(main_folder):
+        Folder_available = True
+        
+    File_available = False
+    if os.path.isfile(folder_list_file):
+        File_available = True
+        
+       
+    if File_available == False and Folder_available == False:
+        raise ValueError(f"Either Folder list file does not exist: {folder_list_file} or Invalid main folder path: {main_folder}")
     
-    if not os.path.exists(main_folder) or not os.path.isdir(main_folder):
-        raise ValueError(f"Invalid main folder path: {main_folder}")
+    if File_available:
+        with open(folder_list_file, 'r') as flf:
+            folder_names = [line.strip() for line in flf if line.strip()]
+
+
     
-    pattern = re.compile(r"^[^\\/]*~[^\\/]*_[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*$")
-    
-    with open(output_file, 'w') as file:
+    if Folder_available and File_available == False:
+        folder_names = []
         for folder in os.listdir(main_folder):
             folder_path = os.path.join(main_folder, folder)
+            folder_names.append(folder_path)
             
-            if os.path.isdir(folder_path) and pattern.match(folder):
-                eeg_file = os.path.join(folder_path, f"{folder}.eeg")
+    pattern = re.compile(r"^[^\\/]*~[^\\/]*_[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*-[^\\/]*$")
+    
+    print("Found folders are:")
+    for qCtr in folder_names:
+        print(f"{qCtr}")
+        
+    with open(output_file, 'w') as of:
+        for folder in folder_names:
+            folder_tmp = os.path.join(main_folder, folder)
+            
+            if os.path.isdir(folder_tmp) and pattern.match(folder):
+                eeg_file = os.path.join(folder_tmp, f"{folder}.eeg")
+                eeg_file = eeg_file.replace("/",f"\\")
                 if os.path.isfile(eeg_file):
-                    file.write(f"{eeg_file}, {constant_path}\n")
+                    of.write(f"{eeg_file}, {constant_path}\n")
+            else: 
+                print(f"Error! folder <{folder_tmp}> does not exist!")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3 or len(sys.argv) > 4:
-        print("Usage: python script.py <main_folder> <output_file> [constant_path]")
-        sys.exit(1)
-    
-    main_folder = sys.argv[1]
-    output_file = sys.argv[2]
-    constant_path = sys.argv[3] if len(sys.argv) == 4 else "D:\\Neuroworks\\Settings\\quantum_new.exp"
-    
+    parser = argparse.ArgumentParser(description="Generate EEG file list from folder names in a text file.")
+    parser.add_argument('--main_folder', required=False, help="Main folder containing EEG subdirectories.")
+    parser.add_argument('--folder_list', required=False, help="Text file with folder names (one per line).")
+    parser.add_argument('--output', required=True, help="Output text file to write valid EEG file paths.")
+    parser.add_argument('--constant_path', default="D:\\Neuroworks\\Settings\\quant_new_256_with_photic.exp", help="Constant path to append to each line.")
+
+    args = parser.parse_args()
+
     try:
-        generate_text_file(main_folder, output_file, constant_path)
-        print(f"Output file generated: {output_file}")
+        generate_text_file_from_list(args.main_folder, args.folder_list, args.output, args.constant_path)
+        print(f"Output file generated: {args.output}")
     except Exception as e:
+        raise(e)
         print(f"Error: {e}")
-        sys.exit(1)
+        exit(1)

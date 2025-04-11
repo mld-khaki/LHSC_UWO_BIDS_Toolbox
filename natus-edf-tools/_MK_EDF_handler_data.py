@@ -25,10 +25,15 @@ tools = {
         "args": ["-o OUTPUT (File)", "input_dir (Folder)"],
         "arg_name": ["-o", ""]
     },
-    "NatusExportList_Generator": {
-        "usage": "python script.py <main_folder> <output_file> [constant_path]",
-        "args": ["main_folder (Folder)", "output_file (File)", "constant_path (Optional File)"],
-        "arg_name": ["", "", ""]        
+        "NatusExportList_Generator": {
+        "usage": "NatusExportList_Generator.py [--main_folder] [--folder_list] [--output] [--constant_path]",
+        "args": [
+            "--main_folder (Folder)",
+            "--folder_list (File)",
+            "--output (File)",
+            "--constant_path (File)"
+        ],
+        "arg_name": ["--main_folder","--folder_list","--output","--constant_path"]
     },
     "TSV_Participant_Merger": {
         "usage": "TSV_Participant_Merger.py [-h] file1 file2 output_file",
@@ -73,10 +78,10 @@ tools = {
         "arg_name": ["","","--output","--ignore_ext"]
     },   
     "TSV_dates_checker": {
-        "usage": "TSV_dates_checker.py tsv_file log_file",
+        "usage": "TSV_dates_checker.py tsv_file <out_log_file>",
         "args": [
             "tsv_file (File)",
-            "log_file (File)"
+            "out_log_file (File)"
         ],
         "arg_name": ["",""]
     },
@@ -103,5 +108,18 @@ tools = {
             "--dir (Folder)"
         ],
         "arg_name": ["--list","--dir"]
-    }    
+    },
+    "EDF_time_calculator": {
+        "usage": "EDF_time_calculator.py [--total_records] [--duration] [--start_time] [--target_start] [--target_end] [--pre_offset] [--post_offset]",
+        "args": [
+            "--total_records (File)",
+            "--duration (File)",
+            "--start_time (File)",
+            "--target_start (File)",
+            "--target_end (File)",
+            "--pre_offset (File)",
+            "--post_offset (File)"
+        ],
+        "arg_name": ["--total_records","--duration","--start_time","--target_start","--target_end","--pre_offset","--post_offset"]
+    }
 }
