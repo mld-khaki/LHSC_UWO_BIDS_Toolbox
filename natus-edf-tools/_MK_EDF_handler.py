@@ -8,6 +8,11 @@ import datetime
 from datetime import datetime
 from _MK_EDF_handler_data import tools
 
+try:
+    from _MK_EDF_defaults import default_args
+except ImportError:
+    default_args = {}
+
 
 # GUI Layout with fixed inputs for all possible arguments
 # We'll hide/show them based on the selected tool
@@ -98,30 +103,32 @@ def update_dynamic_inputs(tool_name):
         window[f"ARG_BROWSE_{i}"].update(visible=False)
         window[f"ARG_FOLDER_{i}"].update(visible=False)
         window[f"ARG_SAVE_{i}"].update(visible=False)
-    
+
     # Show only needed input elements
     for i, arg in enumerate(tools[tool_name]["args"]):
         arg_name, arg_type, is_output, is_optional = determine_arg_properties(arg)
-        
-        # Create appropriate label with optional indicator if needed
+
         label_text = f"{arg_name}{' (Optional)' if is_optional else ''}"
         window[f"ARG_LABEL_{i}"].update(visible=True, value=label_text)
-        window[f"ARG_INPUT_{i}"].update(visible=True)
-        
-        # Show the appropriate browse button
+
+        default_val = default_args.get(tool_name, {}).get(i, "")
+        window[f"ARG_INPUT_{i}"].update(visible=True, value=default_val)
+
         if "(Folder)" in arg_type:
             window[f"ARG_FOLDER_{i}"].update(visible=True)
         elif is_output:
             window[f"ARG_SAVE_{i}"].update(visible=True)
         else:
             window[f"ARG_BROWSE_{i}"].update(visible=True)
-    
-    # Initialize command preview with empty values
+
+    # Fill initial values into command preview
     arg_values = {}
     for i in range(len(tools[tool_name]["args"])):
-        arg_values[f"ARG_INPUT_{i}"] = ""
-    
+        input_val = default_args.get(tool_name, {}).get(i, "")
+        arg_values[f"ARG_INPUT_{i}"] = input_val
+
     update_command_preview(tool_name, arg_values)
+
 
 def save_output_to_file(output_text, suggested_filename=None):
     """Save the console output to a text file."""

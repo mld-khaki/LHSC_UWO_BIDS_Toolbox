@@ -121,5 +121,23 @@ tools = {
             "--post_offset (File)"
         ],
         "arg_name": ["--total_records","--duration","--start_time","--target_start","--target_end","--pre_offset","--post_offset"]
+    },
+    "EDF_folders_matching_tool": {
+        "usage": "EDF_folders_matching_tool.py folder_a folder_b sha256 output_file",
+        "args": [
+            "folder_a (Folder)",
+            "folder_b (Folder)",
+            "sha256 (File)",
+            "output_file (File)"
+        ],
+        "arg_name": ["","","",""]
+    },
+    "EDF_Compatibility_Check_Tool": {
+        "usage": "EDF_Compatibility_Check_Tool.py [--edfbrowser] [--edf]",
+        "args": [
+            "--edfbrowser (File)",
+            "--edf (File)"
+        ],
+        "arg_name": ["--edfbrowser","--edf"]
     }
 }
