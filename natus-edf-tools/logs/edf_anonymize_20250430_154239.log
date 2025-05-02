@@ -1,0 +1,35 @@
+2025-04-30 15:42:39,766 - root - INFO - Logging initialized. Log file: logs\edf_anonymize_20250430_154239.log
+2025-04-30 15:42:39,766 - root - INFO - === EDF Anonymization Tool ===
+2025-04-30 15:42:39,766 - root - INFO - Input file: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced.edf
+2025-04-30 15:42:39,767 - root - INFO - Output file: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced_redacted.edf
+2025-04-30 15:42:39,767 - root - INFO - Buffer size: 64 MB
+2025-04-30 15:42:39,767 - root - INFO - Verification: Disabled
+2025-04-30 15:42:39,770 - root - INFO - Starting anonymization process
+2025-04-30 15:42:39,770 - edf_anonymizer - INFO - Starting anonymization of: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced.edf
+2025-04-30 15:42:39,770 - edf_anonymizer - INFO - Output will be saved to: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced_redacted.edf
+2025-04-30 15:42:39,770 - edf_anonymizer - INFO - Using buffer size of 64 MB
+2025-04-30 15:42:39,772 - edf_anonymizer - INFO - Input file size: 1,974,209,808 bytes (1882.75 MB)
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Header size: 49152 bytes
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Data records: 81121, Duration: 0.03125s per record
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Number of signals: 191
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Signal labels: ['Photic Event', 'Patient Event', 'LOFr1', 'LOFr2', 'LOFr3', 'LOFr4', 'LOFr5', 'LOFr6', 'LOFr7', 'LOFr8', 'LOFr9', 'LOFr10', 'LAm1', 'LAm2', 'LAm3', 'LAm4', 'LAm5', 'LAm6', 'LAm7', 'LAm8', 'LAm9', 'LAm10', 'LAHc1', 'LAHc2', 'LAHc3', 'LAHc4', 'LAHc5', 'LAHc6', 'LAHc7', 'LAHc8', 'LAHc9', 'LAHc10', 'LPHc1', 'LPHc2', 'LPHc3', 'LPHc4', 'LPHc5', 'LPHc6', 'LPHc7', 'LPHc8', 'LPHc9', 'LPHc10', 'LAIn1', 'LAIn2', 'LAIn3', 'LAIn4', 'LAIn5', 'LAIn6', 'LAIn7', 'LAIn8', 'LAIn9', 'LAIn10', 'LMiIn1', 'LMiIn2', 'LMiIn3', 'LMiIn4', 'LMiIn5', 'LMiIn6', 'LMiIn7', 'LMiIn8', 'LMiIn9', 'LMiIn10', 'LPIn1', 'LPIn2', 'LPIn3', 'LPIn4', 'LPIn5', 'LPIn6', 'LPIn7', 'LPIn8', 'LPIn9', 'LPIn10', 'LANT1', 'LANT2', 'LANT3', 'LANT4', 'LANT5', 'LANT6', 'LANT7', 'LANT8', 'LANT9', 'LANT10', 'ROFr1', 'ROFr2', 'ROFr3', 'ROFr4', 'ROFr5', 'ROFr6', 'ROFr7', 'ROFr8', 'ROFr9', 'ROFr10', 'RACg1', 'RACg2', 'RACg3', 'RACg4', 'RACg5', 'RACg6', 'RACg7', 'RACg8', 'RACg9', 'RACg10', 'RPCg1', 'RPCg2', 'RPCg3', 'RPCg4', 'RPCg5', 'RPCg6', 'RPCg7', 'RPCg8', 'RPCg9', 'RPCg10', 'RAm1', 'RAm2', 'RAm3', 'RAm4', 'RAm5', 'RAm6', 'RAm7', 'RAm8', 'RAm9', 'RAm10', 'RAHc1', 'RAHc2', 'RAHc3', 'RAHc4', 'RAHc5', 'RAHc6', 'RAHc7', 'RAHc8', 'RAHc9', 'RAHc10', 'RPHc1', 'RPHc2', 'RPHc3', 'RPHc4', 'RPHc5', 'RPHc6', 'RPHc7', 'RPHc8', 'RPHc9', 'RPHc10', 'RAIn1', 'RAIn2', 'RAIn3', 'RAIn4', 'RAIn5', 'RAIn6', 'RAIn7', 'RAIn8', 'RAIn9', 'RAIn10', 'RMiIn1', 'RMiIn2', 'RMiIn3', 'RMiIn4', 'RMiIn5', 'RMiIn6', 'RMiIn7', 'RMiIn8', 'RMiIn9', 'RMiIn10', 'RPIn1', 'RPIn2', 'RPIn3', 'RPIn4', 'RPIn5', 'RPIn6', 'RPIn7', 'RPIn8', 'RPIn9', 'RPIn10', 'C171', 'C172', 'DC1', 'DC2', 'DC3', 'DC4', 'DC5', 'DC6', 'DC7', 'DC8', 'DC9', 'DC10', 'DC11', 'DC12', 'TRIG', 'OSAT', 'PR', 'Pleth', 'EDF Annotations']
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Annotation channels identified: [190]
+2025-04-30 15:42:39,845 - edf_anonymizer - INFO - Data record size: 24336 bytes
+2025-04-30 15:42:39,845 - edf_processor - INFO - Extracted patient field from header: 'X M 25-SEP-1970 Bondy,Hector'
+2025-04-30 15:42:39,846 - edf_processor - INFO - Generated 2 redaction patterns from header
+2025-04-30 15:42:58,882 - edf_anonymizer - INFO - Patient name from EDFreader: 'Bondy,Hector'
+2025-04-30 15:42:58,882 - edf_anonymizer - INFO - Redaction patterns: 3 unique patterns (removed 1 duplicates)
+2025-04-30 15:42:58,882 - edf_anonymizer - INFO - Anonymizing patient info in header
+2025-04-30 15:42:58,882 - edf_processor - INFO - Original patient field: 'X M 25-SEP-1970 Bondy,Hector'
+2025-04-30 15:42:58,882 - edf_processor - INFO - Original recording field: 'Startdate 14-MAR-2025 Master_07 MJ-event Xluh103d'
+2025-04-30 15:42:58,882 - edf_processor - INFO - Anonymized patient field to: 'X X X X'
+2025-04-30 15:42:58,882 - edf_anonymizer - INFO - Creating output file: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced_redacted.edf
+2025-04-30 15:42:58,898 - edf_anonymizer - INFO - Processing records in chunks: 2757 records (63.99 MB) per chunk
+2025-04-30 15:42:58,898 - edf_anonymizer - INFO - Data bytes to process: 1,974,160,656
+2025-04-30 15:43:19,727 - edf_anonymizer - INFO - Processed 81121 records total, 81121 records with annotations
+2025-04-30 15:43:19,730 - edf_anonymizer - INFO - Output file size: 1,974,209,808 bytes
+2025-04-30 15:43:19,741 - edf_anonymizer - INFO - Anonymization completed in 39.97 seconds
+2025-04-30 15:43:19,741 - edf_anonymizer - INFO - Processing speed: 47.10 MB/s
+2025-04-30 15:43:19,741 - edf_anonymizer - INFO - Anonymized EDF saved to: Y:/Other_Datasets_phis/PhysStims/sub-168/Bondy~ Hector_5146466e-6787-468c-a7e4-172feab9bd97_reduced_redacted.edf
+2025-04-30 15:43:19,742 - root - INFO - Anonymization completed successfully in 39.97 seconds
+2025-04-30 15:43:19,742 - root - INFO - Skipping verification (use --verify to verify signals)

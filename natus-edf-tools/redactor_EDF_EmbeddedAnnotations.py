@@ -867,9 +867,9 @@ def run_verification(input_path, output_path):
     # Print verification summary
     logger.info("=== Verification Summary ===")
     if signals_ok:
-        logger.info(f"✅ Signal verification PASSED: All {results['total_signals']} signals match")
+        logger.info(f"Signal verification PASSED: All {results['total_signals']} signals match")
     else:
-        logger.error(f"❌ Signal verification FAILED: {len(results['mismatched_signals'])} of {results['total_signals']} signals mismatched")
+        logger.error(f"Signal verification FAILED: {len(results['mismatched_signals'])} of {results['total_signals']} signals mismatched")
         for mismatch in results['mismatched_signals']:
             logger.error(f"  - Signal '{mismatch['signal_name']}': "
                        f"{mismatch['total_differences']:,} differences "
@@ -945,26 +945,26 @@ if __name__ == "__main__":
                 verify_elapsed = time.time() - verify_start
                 
                 if verification_result:
-                    logger.info(f"✅ Thorough verification PASSED in {verify_elapsed:.2f} seconds")
-                    print("✅ Anonymization and verification successful")
+                    logger.info(f"Thorough verification PASSED in {verify_elapsed:.2f} seconds")
+                    print("Anonymization and verification successful")
                 else:
-                    logger.error(f"❌ Thorough verification FAILED in {verify_elapsed:.2f} seconds")
-                    print("❌ Anonymization succeeded but verification failed - check logs for details")
+                    logger.error(f"Thorough verification FAILED in {verify_elapsed:.2f} seconds")
+                    print("Anonymization succeeded but verification failed - check logs for details")
             else:
                 # Just do basic validation
                 verification_result = validate_anonymized_file(args.input_path, args.output_path)
                 verify_elapsed = time.time() - verify_start
                 
                 if verification_result:
-                    logger.info(f"✅ Basic validation PASSED in {verify_elapsed:.2f} seconds")
-                    print("✅ Anonymization and basic validation successful")
+                    logger.info(f"Basic validation PASSED in {verify_elapsed:.2f} seconds")
+                    print("Anonymization and basic validation successful")
                 else:
-                    logger.error(f"❌ Basic validation FAILED in {verify_elapsed:.2f} seconds")
-                    print("❌ Anonymization succeeded but validation failed - check logs for details")
+                    logger.error(f"Basic validation FAILED in {verify_elapsed:.2f} seconds")
+                    print("Anonymization succeeded but validation failed - check logs for details")
         else:
             logger.info("Skipping verification (use --verify to verify signals)")
-            print("✅ Anonymization completed successfully (no verification requested)")
+            print("Anonymization completed successfully (no verification requested)")
     else:
         logger.error("Anonymization failed")
-        print("❌ Anonymization failed - check logs for details")
+        print("Anonymization failed - check logs for details")
         sys.exit(1)

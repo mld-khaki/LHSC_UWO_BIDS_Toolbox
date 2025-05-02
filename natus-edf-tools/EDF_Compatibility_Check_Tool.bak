@@ -6,7 +6,9 @@ import os
 import sys
 import threading
 import itertools
-import sys
+
+# Configuration variable for spinner
+ENABLE_SPINNER = True  # Set to False to disable the spinner
 
 def spinner_task(stop_event):
     spinner = itertools.cycle(['|', '/', '-', '\\'])
@@ -42,38 +44,61 @@ def check_edf_compatibility(edfbrowser_path, edf_file_path):
     ]
 
     stop_event = threading.Event()
-    spinner_thread = threading.Thread(target=spinner_task, args=(stop_event,))
-    #spinner_thread.start()
+    spinner_thread = None
+    
+    if ENABLE_SPINNER:
+        spinner_thread = threading.Thread(target=spinner_task, args=(stop_event,))
+        spinner_thread.start()
 
     try:
         with open(output_file_temp, "w", encoding='utf-8') as outfile:
             result = subprocess.run(command, stdout=outfile, stderr=subprocess.STDOUT)
     except Exception as e:
-        #stop_event.set()
-        #spinner_thread.join()
+        if ENABLE_SPINNER:
+            stop_event.set()
+            spinner_thread.join()
         print(f"Fail! Error running edfbrowser: {e}")
         return
 
+    # Stop the spinner
+    if ENABLE_SPINNER:
+        stop_event.set()
+        spinner_thread.join()
 
+    elapsed = time.time() - start_time
 
+    with open(output_file_temp, "r", encoding='utf-8') as f:
+        output_content = f.read()
 
+    # Fixed logic for determining pass/fail status
+    is_valid = False
+    
+    # Check return code and for validity phrases in the output
+    if result.returncode == 0:
+        is_valid = ("valid EDF" in output_content.lower()) and ("not a valid" not in output_content.lower())
+    
+    result_ext = ".edf_pass" if is_valid else ".edf_fail"
+
+    out_filename = base_no_ext + result_ext
+    out_fullpath = os.path.join(dir_path, out_filename)
+
+    with open(out_fullpath, "w", encoding='utf-8') as f:
+        f.write(f"Timestamp: {timestamp}\n")
+        f.write(f"File: {edf_file_path}\n")
+        f.write(f"Elapsed Time: {elapsed:.2f} seconds\n\n")
+        f.write("Output:\n")
+        f.write(output_content)
+
+    os.remove(output_file_temp)
+
+    status = "PASS" if is_valid else "FAIL"
+    print(f"Result [{status}] saved to: {out_fullpath}")
 
 def find_edf_files(folder, recursive=False):
     edf_files = []
-    cnt = 0
-    line_end = 0
     if recursive:
-        for root, _, files in os.walk(folder):            
+        for root, _, files in os.walk(folder):
             for f in files:
-                cnt += 1
-                if cnt > 1000:
-                    print(".",end="",flush=True)
-                    line_end += 1
-                    cnt = 0
-                    if line_end > 80:
-                        print("\r\n")
-                        line_end = 0
-                        
                 if f.lower().endswith(".edf"):
                     edf_files.append(os.path.join(root, f))
     else:
@@ -115,8 +140,8 @@ def main():
             print("[!] No EDF files found.")
             return
         
+        print(f"Found {len(edf_files)} EDF files. Processing...")
         for edf_file in edf_files:
-            print(f"Checking file: {edf_file}")
             check_edf_compatibility(args.edfbrowser, edf_file)
 
 if __name__ == "__main__":

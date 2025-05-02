@@ -133,11 +133,47 @@ tools = {
         "arg_name": ["","","",""]
     },
     "EDF_Compatibility_Check_Tool": {
-        "usage": "EDF_Compatibility_Check_Tool.py [--edfbrowser] [--edf]",
+        "usage": "EDF_Compatibility_Check_Tool.py [--edfbrowser] [--recursive] --folder <folder>",
         "args": [
             "--edfbrowser (File)",
-            "--edf (File)"
+            "--recursive (Flag)",
+            "--folder (Folder)"
         ],
-        "arg_name": ["--edfbrowser","--edf"]
+        "arg_name": ["--edfbrowser","--recursive","--folder"],
+    },
+    "EDF_dir_scanner_renamer": {
+        "usage": "EDF_dir_scanner_renamer.py folder",
+        "args": [
+            "folder (File)"
+        ],
+        "arg_name": [""]
+    },
+    "EDF_step_A_cleanup": {
+        "usage": "EDF_step_A_cleanup.py [--folder_a] [--folder_b] [--dry-run / --real-del-mode]",
+        "args": [
+            "--folder-a (Step A folder) (Folder)",
+            "--folder-b (EDFs, Step B (Folder)",
+            "--dry-run (Flag)",
+            "--real-del-mode (Flag)"
+        ],
+        "arg_name": [
+            "--folder-a",
+            "--folder-b",
+            "--dry-run",
+            "--real-del-mode"
+        ]
+    },
+    "redactor_EDF_EmbeddedAnnotations": {
+        "usage": "redactor_EDF_EmbeddedAnnotations.py input_path output_path [--buffer_size_mb] [--verify] [--verify_level] [--log_dir] [--log_level]",
+        "args": [
+            "input_path (File)",
+            "output_path (File)",
+            "--buffer_size_mb (File)",
+            "--verify (File)",
+            "--verify_level (File)",
+            "--log_dir (File)",
+            "--log_level (File)"
+        ],
+        "arg_name": ["","","--buffer_size_mb","--verify","--verify_level","--log_dir","--log_level"]
     }
 }

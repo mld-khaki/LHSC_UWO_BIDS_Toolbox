@@ -23,6 +23,7 @@ for i in range(max_args):
     row = [
         sg.Text("", size=(20, 1), key=f"ARG_LABEL_{i}", visible=False),
         sg.Input(key=f"ARG_INPUT_{i}", visible=False, size=(30, 1), enable_events=True),
+        sg.Checkbox("", key=f"ARG_CHECK_{i}", visible=False, enable_events=True),
         sg.FileBrowse(key=f"ARG_BROWSE_{i}", visible=False, target=f"ARG_INPUT_{i}"),
         sg.FolderBrowse(key=f"ARG_FOLDER_{i}", visible=False, target=f"ARG_INPUT_{i}"),
         sg.FileSaveAs(key=f"ARG_SAVE_{i}", visible=False, target=f"ARG_INPUT_{i}")
@@ -69,67 +70,24 @@ window = sg.Window("Generalized Script Launcher", layout, finalize=True,
     )
 
 def determine_arg_properties(arg_str):
-    """Determine the properties of an argument based on its string representation."""
-    # Split the argument string into name and type
     if " (" in arg_str:
         arg_name, arg_type = arg_str.rsplit(" (", 1)
-        arg_type = "(" + arg_type  # Add the opening parenthesis back
+        arg_type = "(" + arg_type
     else:
         arg_name = arg_str
-        arg_type = "(File)"  # Default type
-    
-    # Determine if it's an input or output file
-    is_output = False
-    is_optional = False
-    
-    # Check for explicit output indicators
-    if "output" in arg_name.lower() or "out" in arg_name.lower():
-        is_output = True
-    
-    # Check if it's marked as optional
-    if "optional" in arg_type.lower():
-        is_optional = True
-        # Clean up the arg type (remove 'Optional' from display)
+        arg_type = "(File)"
+
+    is_output = "output" in arg_name.lower() or "out" in arg_name.lower()
+    is_optional = "optional" in arg_type.lower()
+    is_flag = "flag" in arg_type.lower()
+
+    if is_optional:
         arg_type = re.sub(r'\(Optional\)\s*', '', arg_type)
+
+    return arg_name.strip(), arg_type.strip(), is_output, is_optional, is_flag
+
+
     
-    return arg_name, arg_type, is_output, is_optional
-
-def update_dynamic_inputs(tool_name):
-    """Dynamically show/hide input fields based on the selected tool."""
-    # Hide all input elements first
-    for i in range(max_args):
-        window[f"ARG_LABEL_{i}"].update(visible=False)
-        window[f"ARG_INPUT_{i}"].update(visible=False, value="")
-        window[f"ARG_BROWSE_{i}"].update(visible=False)
-        window[f"ARG_FOLDER_{i}"].update(visible=False)
-        window[f"ARG_SAVE_{i}"].update(visible=False)
-
-    # Show only needed input elements
-    for i, arg in enumerate(tools[tool_name]["args"]):
-        arg_name, arg_type, is_output, is_optional = determine_arg_properties(arg)
-
-        label_text = f"{arg_name}{' (Optional)' if is_optional else ''}"
-        window[f"ARG_LABEL_{i}"].update(visible=True, value=label_text)
-
-        default_val = default_args.get(tool_name, {}).get(i, "")
-        window[f"ARG_INPUT_{i}"].update(visible=True, value=default_val)
-
-        if "(Folder)" in arg_type:
-            window[f"ARG_FOLDER_{i}"].update(visible=True)
-        elif is_output:
-            window[f"ARG_SAVE_{i}"].update(visible=True)
-        else:
-            window[f"ARG_BROWSE_{i}"].update(visible=True)
-
-    # Fill initial values into command preview
-    arg_values = {}
-    for i in range(len(tools[tool_name]["args"])):
-        input_val = default_args.get(tool_name, {}).get(i, "")
-        arg_values[f"ARG_INPUT_{i}"] = input_val
-
-    update_command_preview(tool_name, arg_values)
-
-
 def save_output_to_file(output_text, suggested_filename=None):
     """Save the console output to a text file."""
     try:
@@ -179,10 +137,10 @@ def save_configuration(values, output_text=None):
         # Get all the argument values for the selected tool
         if tool in tools:
             for i, arg in enumerate(tools[tool]["args"]):
-                arg_name, _, _, _ = determine_arg_properties(arg)
-                input_key = f"ARG_INPUT_{i}"
-                if input_key in values:
-                    config["arguments"][i] = values[input_key]
+                arg_name, _, _, _, is_flag = determine_arg_properties(arg)
+                key = f"ARG_CHECK_{i}" if is_flag else f"ARG_INPUT_{i}"
+                if key in values:
+                    config["arguments"][i] = values[key]
         
         # Include output if requested
         if values.get("SAVE_OUTPUT_WITH_CONFIG", False) and output_text:
@@ -229,6 +187,45 @@ def load_configuration():
         sg.popup_error(f"Error loading configuration: {str(e)}")
         return None
 
+def update_dynamic_inputs(tool_name):
+    """Dynamically show/hide input fields or checkboxes based on the selected tool."""
+    for i in range(max_args):
+        # Hide all widgets by default
+        window[f"ARG_LABEL_{i}"].update(visible=False)
+        window[f"ARG_INPUT_{i}"].update(visible=False)
+        window[f"ARG_CHECK_{i}"].update(visible=False)
+        window[f"ARG_BROWSE_{i}"].update(visible=False)
+        window[f"ARG_FOLDER_{i}"].update(visible=False)
+        window[f"ARG_SAVE_{i}"].update(visible=False)
+
+    for i, arg in enumerate(tools[tool_name]["args"]):
+        arg_name, arg_type, is_output, is_optional, is_flag = determine_arg_properties(arg)
+        label_text = f"{arg_name}{' (Optional)' if is_optional else ''}"
+        window[f"ARG_LABEL_{i}"].update(visible=True, value=label_text)
+
+        if is_flag:
+            default_val = default_args.get(tool_name, {}).get(i, False)
+            window[f"ARG_CHECK_{i}"].update(visible=True, value=default_val)
+        else:
+            default_val = default_args.get(tool_name, {}).get(i, "")
+            window[f"ARG_INPUT_{i}"].update(visible=True, value=default_val) #.replace("\\","/"))
+            if "(Folder)" in arg_type:
+                window[f"ARG_FOLDER_{i}"].update(visible=True)
+            elif is_output:
+                window[f"ARG_SAVE_{i}"].update(visible=True)
+            else:
+                window[f"ARG_BROWSE_{i}"].update(visible=True)
+
+    # Update the command preview with pre-filled/default values
+    arg_values = {}
+    for i in range(len(tools[tool_name]["args"])):
+        is_flag = "flag" in tools[tool_name]["args"][i].lower()
+        key = f"ARG_CHECK_{i}" if is_flag else f"ARG_INPUT_{i}"
+        arg_values[key] = default_args.get(tool_name, {}).get(i, False if is_flag else "")
+
+    update_command_preview(tool_name, arg_values)
+
+
 def update_command_preview(tool, values):
     """Update the command preview box with the current command."""
     if not tool:
@@ -238,18 +235,18 @@ def update_command_preview(tool, values):
     # Build arguments list
     args = []
     
-    # Make sure we don't exceed the length of the arg_name list
     for i in range(len(tools[tool]["args"])):
         arg_tmp = tools[tool]["args"][i]
-        arg_name, _, _, _ = determine_arg_properties(arg_tmp)
+        arg_name, _, _, _, is_flag = determine_arg_properties(arg_tmp)
         input_key = f"ARG_INPUT_{i}"
+        check_key = f"ARG_CHECK_{i}"
         
-        # Check if we have the corresponding arg_name (handles case where arg_name list is shorter)
-        arg_val = ""
-        if i < len(tools[tool]["arg_name"]):
-            arg_val = tools[tool]["arg_name"][i]
-        
-        if input_key in values and values[input_key]:
+        arg_val = tools[tool]["arg_name"][i] if i < len(tools[tool]["arg_name"]) else ""
+
+        if is_flag:
+            if values.get(check_key):
+                args.append(arg_val or arg_name)
+        elif input_key in values and values[input_key]:
             if arg_val:
                 args.append(arg_val)
             args.append(values[input_key])
@@ -284,7 +281,10 @@ def apply_configuration(config, window):
         arguments = config.get("arguments", {})
         for i, value in arguments.items():
             input_key = f"ARG_INPUT_{int(i)}"
-            if input_key in window.AllKeysDict:
+            check_key = f"ARG_CHECK_{int(i)}"
+            if check_key in window.AllKeysDict:
+                window[check_key].update(bool(value))
+            elif input_key in window.AllKeysDict:
                 window[input_key].update(value)
                 
         # Set the save output checkbox
@@ -361,7 +361,7 @@ while True:
             args = []
             for i in range(len(tools[tool]["args"])):
                 arg_tmp = tools[tool]["args"][i]
-                arg_name, _, _, _ = determine_arg_properties(arg_tmp)
+                arg_name, _, _, _, is_flag = determine_arg_properties(arg_tmp)
                 input_key = f"ARG_INPUT_{i}"
                 
                 # Check if we have the corresponding arg_name (handles case where arg_name list is shorter)
@@ -421,9 +421,10 @@ while True:
         else:
             sg.popup("Error", "Please select a tool before running.")
     # Update command preview whenever an input changes
-    elif event.startswith("ARG_INPUT_"):
+    elif event.startswith("ARG_INPUT_") or event.startswith("ARG_CHECK_"):
         selected_tool = values["TOOL"][0] if values["TOOL"] else None
         if selected_tool:
             update_command_preview(selected_tool, values)
+
 
 window.close()
