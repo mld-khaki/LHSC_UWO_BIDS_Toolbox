@@ -37,7 +37,7 @@ def compute_record_indices(
     seconds_from_start_to_adjusted_end = adjusted_end - recording_start_seconds
 
     record_start = round(seconds_from_start_to_adjusted_start * records_per_second)
-    record_end = round(seconds_from_start_to_adjusted_end * records_per_second)
+    record_end = round(seconds_from_start_to_adjusted_end * records_per_second)-1
 
     actual_recording_start = datetime.strptime(recording_start_time_str, "%H:%M:%S")
     start_timestamp = actual_recording_start + timedelta(seconds=seconds_from_start_to_adjusted_start)

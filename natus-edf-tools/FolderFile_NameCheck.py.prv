@@ -1,0 +1,62 @@
+import os
+import fnmatch
+import argparse
+
+def read_patterns_from_file(file_path):
+    with open(file_path, 'r') as f:
+        patterns = [line.strip() for line in f if line.strip()]
+    return patterns
+
+def match_patterns(patterns, base_folder):
+    found = []
+    not_found = []
+
+    for pattern in patterns:
+        is_folder = pattern.endswith("\\")
+        clean_pattern = pattern.rstrip("\\")
+        
+        # Use os.walk to gather all paths (non-recursive by default)
+        candidates = os.listdir(base_folder)
+
+        # Match full names (not recursive search)
+        matched = fnmatch.filter(candidates, clean_pattern)
+
+        # Check if matched files/folders exist with correct type
+        matched_valid = []
+        for m in matched:
+            full_path = os.path.join(base_folder, m)
+            print(f"Checking list item {m} in folder {base_folder}",end="")
+            if is_folder and os.path.isdir(full_path):
+                matched_valid.append(m)
+                print("...found!")
+            elif not is_folder and os.path.isfile(full_path):
+                matched_valid.append(m)
+                #print("...found!")
+
+        if matched_valid:
+            found.append(pattern)
+        else:
+            not_found.append(pattern)
+
+    return found, not_found
+
+def main():
+    parser = argparse.ArgumentParser(description="Match files/folders from list against a target directory.")
+    parser.add_argument("--list", required=True, help="Path to .txt file containing patterns")
+    parser.add_argument("--dir", required=True, help="Target directory to search")
+    args = parser.parse_args()
+
+    patterns = read_patterns_from_file(args.list)
+    print(patterns)
+    found, not_found = match_patterns(patterns, args.dir)
+
+    print("\n=== FOUND ===")
+    for f in found:
+        print(f)
+
+    print("\n=== NOT FOUND ===")
+    for nf in not_found:
+        print(nf)
+
+if __name__ == "__main__":
+    main()
