@@ -11,9 +11,14 @@ tools = {
         "arg_name": ["--output", ""]
     },
     "redactor_TSV_JSON": {
-        "usage": "TSV_JSON_redacting_tool.py [-h] excel_path folder_path",
-        "args": ["excel_path (File)", "folder_path (Folder)"],
-        "arg_name": ["", ""]
+        "usage": "redactor_TSV_JSON.py excel_path input_folder backup_folder_org backup_folder_upd",
+        "args": [
+            "excel_path (File)",
+            "input_folder (File)",
+            "backup_folder_org (File)",
+            "backup_folder_upd (File)"
+        ],
+        "arg_name": ["","","",""]
     },
     "Natus_InfoExtractor": {
         "usage": "Natus_InfoExtractor.py [-h] [-o OUTPUT] input_dir",
@@ -175,5 +180,15 @@ tools = {
             "--log_level (File)"
         ],
         "arg_name": ["","","--buffer_size_mb","--verify","--verify_level","--log_dir","--log_level"]
+    },
+    "EDF_BIDS_Cleanup_Archive_post_step_C": {
+        "usage": "EDF_BIDS_Cleanup_Archive_post_step_C.py [--excel] [--source] [--dest] store_true",
+        "args": [
+            "--excel (File)",
+            "--source (File)",
+            "--dest (Folder)",
+            "store_true (File)"
+        ],
+        "arg_name": ["--excel","--source","--dest",""]
     }
 }

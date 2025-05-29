@@ -5,7 +5,10 @@ import re
 from EDF_Compatibility_Check_Tool import check_edf_compatibility
 
 EDFBROWSER_PATH = r"c:\_Code\S22_GitHub\EDFbrowser_CompatChecker\edfbrowser.exe"  # UPDATE this path
-MAIN_FOLDER = r"x:\_pipeline\Step_B_EDF_with_id_Monitored_PreBID"         # UPDATE this path
+MAIN_FOLDER = r"x:\_pipeline\_StepB_AutoFLD_NatusInp_StepAOut"         # UPDATE this path
+
+#MAIN_FOLDER    = r'c:\_Code_SortQueue\_temp_BIDS'
+
 SCAN_INTERVAL_SEC = 10
 
 def is_file_locked(filepath):
@@ -43,9 +46,9 @@ def process_new_edf_files():
             check_edf_compatibility(EDFBROWSER_PATH, edf_path)
 
 def main():
-    print(f"Monitoring {MAIN_FOLDER} every {SCAN_INTERVAL_SEC} seconds...")
     while True:
         try:
+            print(f"Monitoring {MAIN_FOLDER} every {SCAN_INTERVAL_SEC} seconds...")
             process_new_edf_files()
         except Exception as e:
             print(f"[Error] {e}")
