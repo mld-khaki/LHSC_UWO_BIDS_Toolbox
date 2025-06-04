@@ -127,7 +127,7 @@ tools = {
         ],
         "arg_name": ["--total_records","--duration","--start_time","--target_start","--target_end","--pre_offset","--post_offset"]
     },
-    "EDF_folders_matching_tool": {
+    "./Modules/StepB0_Eval/EDF_folders_matching_tool": {
         "usage": "EDF_folders_matching_tool.py folder_a folder_b sha256 output_file",
         "args": [
             "folder_a (Folder)",

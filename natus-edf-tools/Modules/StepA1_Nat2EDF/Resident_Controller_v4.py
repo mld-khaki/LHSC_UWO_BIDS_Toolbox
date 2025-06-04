@@ -77,9 +77,9 @@ def run_conversion(input_folder, processed_list):
 def main_loop():
     while True:
         processed_list = read_processed_list()
-        print(f"Checking folder: <{MAIN_FOLDER}>...")
         for folder in os.listdir(MAIN_FOLDER):
             folder_path = os.path.join(MAIN_FOLDER, folder)
+            print(f"Checking folder: <{MAIN_FOLDER}>...")
             if os.path.isdir(folder_path):
                 run_conversion(folder, processed_list)
         time.sleep(CHECK_INTERVAL)

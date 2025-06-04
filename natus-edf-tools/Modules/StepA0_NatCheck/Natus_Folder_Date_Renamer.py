@@ -1,6 +1,6 @@
 import os
 import datetime
-from collections import Counter
+from collections import defaultdict
 import argparse
 
 def get_earliest_timestamp(path):
@@ -10,8 +10,15 @@ def get_earliest_timestamp(path):
     earliest = min(created, modified)
     return datetime.datetime.fromtimestamp(earliest).astimezone().date()
 
+def human_readable_size(size_bytes):
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} PB"
+
 def process_subfolder(subfolder_path, interactive):
-    date_counter = Counter()
+    date_info = defaultdict(lambda: {'count': 0, 'size': 0})
     all_files = []
 
     for root, _, files in os.walk(subfolder_path):
@@ -19,7 +26,9 @@ def process_subfolder(subfolder_path, interactive):
             file_path = os.path.join(root, file)
             try:
                 file_date = get_earliest_timestamp(file_path)
-                date_counter[file_date] += 1
+                file_size = os.path.getsize(file_path)
+                date_info[file_date]['count'] += 1
+                date_info[file_date]['size'] += file_size
                 all_files.append(file_path)
             except Exception as e:
                 print(f"Error reading {file_path}: {e}")
@@ -29,7 +38,9 @@ def process_subfolder(subfolder_path, interactive):
         print(f"No files found in {subfolder_path}")
         return
 
-    most_common_date, count = date_counter.most_common(1)[0]
+    # Get most common date
+    most_common_date = max(date_info.items(), key=lambda x: x[1]['count'])[0]
+    count = date_info[most_common_date]['count']
     percentage = count / total_files * 100
 
     folder_name = os.path.basename(subfolder_path)
@@ -47,8 +58,10 @@ def process_subfolder(subfolder_path, interactive):
     else:
         print(f"\nFolder: {subfolder_path}")
         print("File date distribution (based on earliest of created/modified):")
-        for date, count in sorted(date_counter.items()):
-            print(f"  {date}: {count} file(s)")
+        for date in sorted(date_info):
+            count = date_info[date]['count']
+            size = date_info[date]['size']
+            print(f"  {date}: {count} file(s), {human_readable_size(size)}")
 
         if interactive:
             print("Options:")

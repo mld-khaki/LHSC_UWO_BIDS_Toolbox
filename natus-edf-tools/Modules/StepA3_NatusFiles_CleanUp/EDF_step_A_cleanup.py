@@ -59,19 +59,23 @@ def move_files_to_parent_deletable(folder_path, deletable_root, extensions, logg
                         logger.error(f"Failed to move {source_path}: {e}")
 
 def rar_compress(folder_path, output_rar, logger, dry_run):
-    cmd = [
-        r"c:\Program Files\WinRAR\WinRAR.exe", "a", "-m3", "-md1g", "-s", "-rr5%", "-df", "-t",
-        output_rar, folder_path
-    ]
+    winrar_exe = r'"C:\Program Files\WinRAR\WinRAR.exe"'  # quoted for safety
+    cmd = (
+        f'start /min "" {winrar_exe} a -m3 -md1g -s -rr5% -df -t '
+        f'"{output_rar}" "{folder_path}"'
+    )
+
     if dry_run:
-        logger.info(f"[Dry Run] Would run: {' '.join(cmd)}")
+        logger.info(f"[Dry Run] Would run: {cmd}")
         return
-    logger.info(f"Running RAR compression: {' '.join(cmd)}")
+
+    logger.info(f"Running RAR compression: {cmd}")
     try:
-        subprocess.run(cmd, check=True)
-        logger.info(f"RAR archive created: {output_rar}")
+        subprocess.run(cmd, shell=True)
+        logger.info(f"RAR archive started: {output_rar}")
     except subprocess.CalledProcessError as e:
         logger.error(f"RAR compression failed for {folder_path}: {e}")
+
 
 def rename_file_with_suffix(file_path, suffix, logger, dry_run):
     file = Path(file_path)
@@ -127,12 +131,19 @@ def main(folder_b, folder_a, dry_run):
     logger.info("Processing complete.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Verify, clean, compress, and rename EDF data folders.")
-    parser.add_argument("--folder-a", type=str, help="Path to Folder A (with corresponding subfolders)")
-    parser.add_argument("--folder-b", type=str, help="Path to Folder B (with .edf and .edf_pass files)")
-    parser.add_argument("--dry-run", action="store_true", help="Simulate actions without deleting or modifying anything")
-    parser.add_argument("--real-del-mode", action="store_true", help="Enable actual deletion and renaming")
+    parser = argparse.ArgumentParser(
+        description="Verify, clean, compress, and rename EDF data folders."
+    )
+    parser.add_argument("--folder-a", type=str, required=True,
+                        help="Path to Folder A (with corresponding subfolders)")
+    parser.add_argument("--folder-b", type=str, required=True,
+                        help="Path to Folder B (with .edf and .edf_pass files)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Simulate actions without deleting or modifying anything")
+    parser.add_argument("--real-del-mode", action="store_true",
+                        help="Enable actual deletion and renaming")
 
     args = parser.parse_args()
+
     dry_run_mode = not args.real_del_mode
     main(args.folder_b, args.folder_a, dry_run_mode)
