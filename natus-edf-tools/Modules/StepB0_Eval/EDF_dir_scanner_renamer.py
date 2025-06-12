@@ -12,7 +12,7 @@ import re
 #except ImportError:
  #   EDFLIBPY_AVAILABLE = False
 
-cur_path = r'./'
+cur_path = r'../../'
 sys.path.append(os.path.abspath(cur_path))
 os.environ['PATH'] += os.pathsep + cur_path
 
