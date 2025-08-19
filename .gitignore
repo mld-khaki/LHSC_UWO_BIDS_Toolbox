@@ -7,3 +7,5 @@ archiving-toolbox/process.log
 data2bids/main.py.bak01
 data2bids/main.py.bak01
 data2bids/main.py.bak01
+*.pyc
+*.log

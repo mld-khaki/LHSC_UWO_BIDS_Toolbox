@@ -11,8 +11,8 @@ tools = {
         "args": ["--output (File)", "folder (Folder)"],
         "arg_name": ["--output", ""]
     },
-    "./Modules/StepC3_BIDS_Redaction/redactor_TSV_JSON": {
-        "usage": "redactor_TSV_JSON.py excel_path input_folder backup_folder_org backup_folder_upd",
+    "./Modules/StepC3_BIDS_Redaction/TSV_JSON_redacting_tool": {
+        "usage": "TSV_JSON_redacting_tool.py excel_path input_folder backup_folder_org backup_folder_upd",
         "args": [
             "excel_path (File)",
             "input_folder (File)",

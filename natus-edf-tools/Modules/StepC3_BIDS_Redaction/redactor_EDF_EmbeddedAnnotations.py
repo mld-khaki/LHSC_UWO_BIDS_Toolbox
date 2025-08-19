@@ -8,6 +8,16 @@ import traceback
 import argparse
 from datetime import datetime
 import sys
+
+# Get the absolute path of the directory containing the current script
+current_script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the path to the directory two levels up
+# '..' represents one level up, so '../../' represents two levels up
+two_levels_up_path = os.path.abspath(os.path.join(current_script_dir, '..', '..'))
+
+# Add this path to sys.path
+sys.path.append(two_levels_up_path)
 from edflibpy.edfreader import EDFreader
 
 from tqdm import tqdm

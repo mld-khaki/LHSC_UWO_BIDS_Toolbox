@@ -3,7 +3,7 @@
 # Author: Dr. Milad Khaki (Updated by ChatGPT)
 # Date: 2025-02-24
 # Description: Optimized script redacts names from TSV and JSON files using caching, combined Aho–Corasick search, and optimized I/O.
-# Usage: python TSV_JSON_redacting_tool_optimized.py <excel_path> <folder_path> <backup_folder> <backup_folder_upd>
+# Usage: python TSV_JSON_redacting_tool_optimized.py <csv_path> <folder_path> <backup_folder> <backup_folder_upd>
 # License: MIT License
 
 import os
@@ -24,22 +24,22 @@ ignore_list = ["obscur", "please", "clean", "leans", "polyspik", "adjustin", "ag
     "max 5", "max 6", "max 7", "max 8", "max 9", "max 0", "max L", "Max L", "clear", 
     "polys", "piano", "todd's", "todds","quivering","ering","POLYSPIK","against","leaves",
     "Todds","Todd's","sparkling","Clear","unpleasant","leading","PLEASE","variant"," IAn",
-    "maximum","Maximum","MAXIMUM", " max ", "LIAn"]
+    "maximum","Maximum","MAXIMUM", " max ", "LIAn","automatic","automatically","auto"]
 
-def load_names_from_excel(excel_path):
-    """Load names from an Excel file and generate variations."""
-    #df = pd.read_excel(excel_path, usecols=["LastName", "FirstName"], dtype=str)
-    df = pd.read_csv(excel_path, usecols=["LastName", "FirstName"], dtype=str)
-    df.dropna(subset=["LastName", "FirstName"], inplace=True)
+def load_names_from_csv(csv_path):
+    """Load names from an csv file and generate variations."""
+    #df = pd.read_csv(csv_path, usecols=["lastname", "firstname"], dtype=str)
+    df = pd.read_csv(csv_path, usecols=["lastname", "firstname"], dtype=str)
+    df.dropna(subset=["lastname", "firstname"], inplace=True)
 
-    last_names = set(df["LastName"].str.strip().tolist())
-    first_names = set(df["FirstName"].str.strip().tolist())
+    last_names = set(df["lastname"].str.strip().tolist())
+    first_names = set(df["firstname"].str.strip().tolist())
 
     full_names = set()
     reverse_full_names = set()
 
     for _, row in df.iterrows():    
-        first, last = row["FirstName"].strip(), row["LastName"].strip()
+        first, last = row["firstname"].strip(), row["lastname"].strip()
         print(first, last)
         full_names.add(f"{last}{first[0]}")
         full_names.add(f"{first} {last}")
@@ -158,6 +158,8 @@ def process_tsv(file_path, args, automaton, last_names, first_names, full_names,
     temp_file_path = file_path + ".tmp"
 
     with open(file_path, "r", encoding="utf-8") as infile, open(temp_file_path, "w", encoding="utf-8", newline='') as outfile:
+        print(f"Checking file <{file_path}>..",end="")
+
         reader = csv.reader(infile, delimiter='\t')
         writer = csv.writer(outfile, delimiter='\t')
 
@@ -234,13 +236,15 @@ def process_json(file_path, args, automaton, last_names, first_names, full_names
         rel_path = os.path.relpath(file_path, args.input_folder)
         backup_path_upd = os.path.join(args.backup_folder_upd, rel_path)
         os.makedirs(os.path.dirname(backup_path_upd), exist_ok=True)
-
+        
         with open(file_path, "w", encoding="utf-8") as f:
+            print(f"Checking file <{file_path}>..",end="")
             json.dump(modified_data, f, indent=4, ensure_ascii=False)
 
         shutil.copyfile(file_path, backup_path_upd)
 
         backup_path_org = move_to_backup(file_path, args.input_folder, args.backup_folder_org)
+        print("done!")
 
         print(f" - Redacted JSON file. Backup moved to {backup_path_org}, org moved to {backup_path_upd}")        
     else:
@@ -342,7 +346,7 @@ def search_and_process_files(args, automaton, last_names, first_names, full_name
 def main():
     """Main function to get user input and run the script."""
     parser = argparse.ArgumentParser(description="Redact names from TSV and JSON files.")
-    parser.add_argument("excel_path", nargs="?", help="Path to the Excel file")
+    parser.add_argument("csv_path", nargs="?", help="Path to the csv file")
     parser.add_argument("input_folder", nargs="?", help="Folder containing TSV/JSON files")
     parser.add_argument("backup_folder_org", nargs="?", help="Folder to store original files")
     parser.add_argument("backup_folder_upd", nargs="?", help="Folder2 to store newly generated files")
@@ -350,8 +354,8 @@ def main():
     args = parser.parse_args()
 
     # Prompt user if any argument is missing
-    if not args.excel_path:
-        args.excel_path = input("Enter path to Excel file (default: e:/iEEG_Demographics.xlsx): ") or "e:/iEEG_Demographics.xlsx"
+    if not args.csv_path:
+        args.csv_path = input("Enter path to csv file (default: e:/iEEG_Demographics.csv): ") or "e:/iEEG_Demographics.csv"
     if not args.input_folder:
         args.input_folder = input("Enter input folder path (default: c:/tmp/all_tsv/): ") or "c:/tmp/all_tsv/"
     if not args.backup_folder_org:
@@ -361,8 +365,8 @@ def main():
 
     start_time = time.time()
 
-    print(f"Loading names from {args.excel_path}...")
-    last_names, first_names, full_names, reverse_full_names = load_names_from_excel(args.excel_path)
+    print(f"Loading names from {args.csv_path}...")
+    last_names, first_names, full_names, reverse_full_names = load_names_from_csv(args.csv_path)
 
     automaton = build_automaton(set().union(last_names, first_names, full_names, reverse_full_names))
 
