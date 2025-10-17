@@ -2,10 +2,59 @@
 # -*- coding: utf-8 -*-
 
 """
-Natus Session Finder GUI
+Natus Session Finder GUI Version 1.1
+Author: Dr. Milad Khaki 
+Latest update: 2025/10/16 
 ------------------------
 
-What's new in this version
+What’s new in Version 1.1
+
+* Sorting & columns
+    - Type-aware sorting for:
+        = RecStart / RecEnd as real datetimes (YYYY-MM-DD HH:MM:SS)
+        = Dominant Date as a real date
+        = Size parsed to bytes (so “1.2 GB”, “512 MB”, etc. sort correctly)
+        = Duration parsed to seconds (see below)
+
+    - Missing/empty values always sort last in both directions.
+
+    - New Duration column = RecEnd - RecStart shown as HH:MM:SS, sortable.
+
+* Coverage checker (TSV-style, no TSV needed)
+
+    - New “Check Coverage (Selected)” button:
+        = Computes per-day total hours, missing days, <23h days, and days with multiple sessions using only the selected sessions.
+        = Skips rows without RecStart/RecEnd (as requested).
+        = Opens a report window with a Re-check button for quick repeat runs.
+        = Mirrors summary to the Log pane.
+
+    - Threshold (default 23 h) comes from the INI file (see below).
+
+* Context menu (right-click on the list)
+    - Toggle selection (applies to the single selected row).
+    - Delete item from list (list only; never touches disk).
+    - Refresh (selected item) recalculates stats for that one row.
+    - Quick metadata (selected item) runs the same quick-meta path, only for that row.
+
+* INI-based defaults (file beside the .py)
+    - Auto-creates StepA_Natus_Raw_Metadata_Extractor_GUI.ini on first run.
+    - [columns]: choose which columns show (true/false). Includes the new duration key.
+    - [checker]: threshold_hours = 23 (you can change it).
+    - The UI reads the INI at startup and builds the table accordingly.
+
+* Two-part export for copy/move
+    - Export now produces two outputs:
+    - A standalone Python script (copy or move, per your toggle).
+    - A paired CSV list (*_items.csv) of (src_path, dest_subfolder_name).
+    - The main script reads the CSV at runtime to process items.
+    - Missing-at-export items are noted in comments in the generated script.
+
+* Robustness & QoL touches
+    - Row insertion/refresh logic is column-order aware (works even if some columns are hidden via INI).
+    - Quick-meta/refresh use existing labels (e.g., Recent) if present, or recompute when needed.
+    - Log messages for coverage, quick-meta, refresh, and export are clearer.
+
+What's new in version 1.0
 - Load Session now **asks** if you want to **Rescan** disk to refresh stats, or use saved stats.
 - Load Session shows a **progress bar** (deterministic) while reconciling items.
 - Row highlighting stays: Missing (red), New (blue), Present (black).
@@ -248,6 +297,7 @@ class App(tk.Tk):
     # --- UI ---
 
     def _build_ui(self):
+        import configparser
         # Controls frame
         frm = ttk.Frame(self)
         frm.pack(fill="x", padx=10, pady=8)
@@ -287,7 +337,7 @@ class App(tk.Tk):
         ttk.Button(frm, text="Quick metadata for selected", command=self._start_quick_meta).grid(row=1, column=5, padx=6, pady=(6,0))
         ttk.Button(frm, text="Export CSV", command=self._export_csv).grid(row=1, column=6, padx=6, pady=(6,0))
 
-        # Row 3: bulk selection + session I/O + copy script
+        # Row 3: bulk selection + session I/O + copy/move script + coverage
         ttk.Button(frm, text="Select All", command=self._select_all).grid(row=2, column=1, sticky="w", pady=(6,0))
         ttk.Button(frm, text="Select None", command=self._select_none).grid(row=2, column=1, sticky="e", pady=(6,0))
         ttk.Button(frm, text="Save Session", command=self._save_session).grid(row=2, column=4, pady=(6,0))
@@ -295,9 +345,10 @@ class App(tk.Tk):
 
         self.var_script_move = tk.BooleanVar(value=False)
         ttk.Checkbutton(frm, text="Script: move instead of copy", variable=self.var_script_move).grid(row=2, column=6, pady=(6,0), sticky="w")
-        ttk.Button(frm, text="Export Copy Script", command=self._export_copy_script).grid(row=2, column=7, pady=(6,0), padx=6)
+        ttk.Button(frm, text="Export Copy/Move (code + CSV)", command=self._export_copy_script).grid(row=2, column=7, pady=(6,0), padx=6)
+        ttk.Button(frm, text="Check Coverage (Selected)", command=self._start_coverage_check).grid(row=2, column=8, pady=(6,0), padx=6)
 
-        for i in range(9):
+        for i in range(10):
             frm.columnconfigure(i, weight=1)
 
         # Progress bar + label
@@ -308,16 +359,44 @@ class App(tk.Tk):
         self.progress_label = ttk.Label(pfrm, text="")
         self.progress_label.grid(row=0, column=1, sticky="w", padx=10)
 
+        # --- Configuration (INI) ---
+        self._ini_path = Path(__file__).with_suffix(".ini")
+        self._config = configparser.ConfigParser()
+        default_columns = [
+            "selected", "status", "folder_name", "dominant_date", "dom_fraction",
+            "total_files", "total_size", "has_eeg", "recent", "study_name",
+            "rec_start", "rec_end", "duration", "eegno", "machine"
+        ]
+        # Ensure file exists with defaults
+        if not self._ini_path.exists():
+            self._config["columns"] = {c: "true" for c in default_columns}
+            self._config["checker"] = {"threshold_hours": "23"}
+            try:
+                with open(self._ini_path, "w") as fh:
+                    self._config.write(fh)
+            except Exception:
+                pass
+        # Load (and merge defaults)
+        self._config.read(self._ini_path)
+        if "columns" not in self._config:
+            self._config["columns"] = {c: "true" for c in default_columns}
+        if "checker" not in self._config:
+            self._config["checker"] = {"threshold_hours": "23"}
+
+        # Columns to show
+        enabled_cols = []
+        for c in default_columns:
+            try:
+                if self._config.getboolean("columns", c, fallback=True):
+                    enabled_cols.append(c)
+            except Exception:
+                enabled_cols.append(c)
+
         # Table with scrollbars
         table_frame = ttk.Frame(self)
         table_frame.pack(fill="both", expand=True, padx=10, pady=8)
 
-        cols = [
-            "selected", "status", "folder_name", "dominant_date", "dom_fraction",
-            "total_files", "total_size", "has_eeg", "recent", "study_name",
-            "rec_start", "rec_end", "eegno", "machine"
-        ]
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings", height=20, selectmode="extended")
+        self.tree = ttk.Treeview(table_frame, columns=enabled_cols, show="headings", height=20, selectmode="extended")
         vbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         hbar = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
@@ -341,15 +420,16 @@ class App(tk.Tk):
             "study_name": "StudyName",
             "rec_start": "RecStart",
             "rec_end": "RecEnd",
+            "duration": "Duration",
             "eegno": "EegNo",
             "machine": "Machine",
         }
         widths = {
             "selected": 56, "status": 90, "folder_name": 320, "dominant_date": 120, "dom_fraction": 110,
             "total_files": 80, "total_size": 120, "has_eeg": 70, "recent": 100,
-            "study_name": 220, "rec_start": 180, "rec_end": 180, "eegno": 140, "machine": 150
+            "study_name": 220, "rec_start": 180, "rec_end": 180, "duration": 110, "eegno": 140, "machine": 150
         }
-        for c in cols:
+        for c in enabled_cols:
             self.tree.heading(c, text=headers[c], command=lambda c=c: self._sort_by(c, False))
             self.tree.column(c, width=widths[c], anchor="w", stretch=True)
 
@@ -360,15 +440,38 @@ class App(tk.Tk):
 
         # Mouse + keyboard bindings
         self.tree.bind("<Double-1>", self._toggle_selected_event)
+        # Right-click context menu
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
         # Space toggles selection for focused row or all highlighted rows
         self.tree.bind("<space>", self._space_toggle)
         self.tree.focus_set()
 
+        # Build context menu
+        self._ctx_menu = tk.Menu(self, tearoff=0)
+        self._ctx_menu.add_command(label="Toggle selection", command=self._ctx_toggle_selected)
+        self._ctx_menu.add_command(label="Delete item from list", command=self._ctx_delete_item)
+        self._ctx_menu.add_separator()
+        self._ctx_menu.add_command(label="Refresh (selected item)", command=self._ctx_refresh_selected)
+        self._ctx_menu.add_command(label="Quick metadata (selected item)", command=self._ctx_quick_meta_selected)
+
         # Log area
         lf = ttk.LabelFrame(self, text="Log")
         lf.pack(fill="both", expand=False, padx=10, pady=(0,10))
-        self.txt_log = tk.Text(lf, height=10)
+        self.txt_log = tk.Text(lf, height=10, width=120, wrap="word")
         self.txt_log.pack(fill="both", expand=True)
+
+        # Progress init
+        self._progress_total = 0
+        self._progress_value = 0
+
+        # worker threads
+        self._scan_thread = None
+        self._copy_thread = None
+        self._meta_thread = None
+
+        # data rows
+        self.rows = []
+
 
     # --- Log ---
 
@@ -458,22 +561,39 @@ class App(tk.Tk):
         return ("Yes" if is_recent else "No"), is_recent
 
     def _insert_row(self, r, recent_label: str):
-        vals = [
-            "Yes" if r.selected else "",
-            r.status,
-            r.folder_name,
-            r.dominant_date,
-            f"{r.dom_fraction*100:.1f}%",
-            r.total_files,
-            human_size(r.total_size),
-            "Yes" if r.has_eeg else "No",
-            recent_label,
-            r.study_name or "",
-            r.rec_start or "",
-            r.rec_end or "",
-            r.eegno or "",
-            r.machine or ""
-        ]
+        # Build a value map for ALL possible columns, then project to visible columns order.
+        def duration_str():
+            try:
+                if r.rec_start and r.rec_end:
+                    t0 = datetime.strptime(r.rec_start, "%Y-%m-%d %H:%M:%S")
+                    t1 = datetime.strptime(r.rec_end, "%Y-%m-%d %H:%M:%S")
+                    secs = max(0, int((t1 - t0).total_seconds()))
+                    hh = secs // 3600
+                    mm = (secs % 3600) // 60
+                    ss = secs % 60
+                    return f"{hh:02d}:{mm:02d}:{ss:02d}"
+            except Exception:
+                pass
+            return ""
+        valmap = {
+            "selected": "Yes" if r.selected else "",
+            "status": r.status,
+            "folder_name": r.folder_name,
+            "dominant_date": r.dominant_date,
+            "dom_fraction": f"{r.dom_fraction*100:.1f}%",
+            "total_files": r.total_files,
+            "total_size": human_size(r.total_size),
+            "has_eeg": "Yes" if r.has_eeg else "No",
+            "recent": recent_label,
+            "study_name": r.study_name or "",
+            "rec_start": r.rec_start or "",
+            "rec_end": r.rec_end or "",
+            "duration": duration_str(),
+            "eegno": r.eegno or "",
+            "machine": r.machine or "",
+        }
+        cols = list(self.tree["columns"])
+        vals = [valmap.get(c, "") for c in cols]
         tag = "present"
         if r.status == "Missing":
             tag = "missing"
@@ -481,29 +601,47 @@ class App(tk.Tk):
             tag = "new"
         self.tree.insert("", "end", iid=r.folder_path, values=vals, tags=(tag,))
 
+
     def _refresh_row_in_tree(self, r, recent_label):
-        vals = [
-            "Yes" if r.selected else "",
-            r.status,
-            r.folder_name,
-            r.dominant_date,
-            f"{r.dom_fraction*100:.1f}%",
-            r.total_files,
-            human_size(r.total_size),
-            "Yes" if r.has_eeg else "No",
-            recent_label,
-            r.study_name or "",
-            r.rec_start or "",
-            r.rec_end or "",
-            r.eegno or "",
-            r.machine or ""
-        ]
+        def duration_str():
+            try:
+                if r.rec_start and r.rec_end:
+                    t0 = datetime.strptime(r.rec_start, "%Y-%m-%d %H:%M:%S")
+                    t1 = datetime.strptime(r.rec_end, "%Y-%m-%d %H:%M:%S")
+                    secs = max(0, int((t1 - t0).total_seconds()))
+                    hh = secs // 3600
+                    mm = (secs % 3600) // 60
+                    ss = secs % 60
+                    return f"{hh:02d}:{mm:02d}:{ss:02d}"
+            except Exception:
+                pass
+            return ""
+        valmap = {
+            "selected": "Yes" if r.selected else "",
+            "status": r.status,
+            "folder_name": r.folder_name,
+            "dominant_date": r.dominant_date,
+            "dom_fraction": f"{r.dom_fraction*100:.1f}%",
+            "total_files": r.total_files,
+            "total_size": human_size(r.total_size),
+            "has_eeg": "Yes" if r.has_eeg else "No",
+            "recent": recent_label,
+            "study_name": r.study_name or "",
+            "rec_start": r.rec_start or "",
+            "rec_end": r.rec_end or "",
+            "duration": duration_str(),
+            "eegno": r.eegno or "",
+            "machine": r.machine or "",
+        }
+        cols = list(self.tree["columns"])
+        vals = [valmap.get(c, "") for c in cols]
         tag = "present"
         if r.status == "Missing":
             tag = "missing"
         elif r.status == "New":
             tag = "new"
         self.tree.item(r.folder_path, values=vals, tags=(tag,))
+
 
     def _toggle_rows(self, iids):
         if not iids:
@@ -512,10 +650,18 @@ class App(tk.Tk):
             for r in self.rows:
                 if r.folder_path == iid:
                     r.selected = not r.selected
-                    vals = list(self.tree.item(iid, "values"))
-                    vals[0] = "Yes" if r.selected else ""
-                    self.tree.item(iid, values=vals)
+                    # recompute 'recent' label if needed
+                    cols = list(self.tree["columns"])
+                    if "recent" in cols:
+                        idx = cols.index("recent")
+                        vals = self.tree.item(iid, "values")
+                        recent_label = vals[idx] if idx < len(vals) else "—"
+                    else:
+                        days = self._parse_days_optional()
+                        recent_label, _ = self._recent_label_from_days(days, r.dominant_date, r.latest_ts)
+                    self._refresh_row_in_tree(r, recent_label)
                     break
+
 
     def _toggle_selected_event(self, event):
         item = self.tree.identify_row(event.y)
@@ -532,23 +678,119 @@ class App(tk.Tk):
         return "break"  # stop spacebar from scrolling
 
     def _sort_by(self, col, descending):
-        col_index = self.tree["columns"].index(col)
-        data = []
+        """
+        Stable sort with type-aware keys and "missing last" policy.
+
+        Special handling:
+          - rec_start / rec_end: parse "YYYY-MM-DD HH:MM:SS" to timestamp.
+          - dominant_date: parse "YYYY-MM-DD" to date ordinal.
+          - total_size: parse human size ("1.2 GB") to bytes.
+          - dom_fraction: parse "NN.N%" to float.
+          - duration: parse "HH:MM:SS" to seconds.
+
+        For any unparsable/missing values, those rows are always placed LAST
+        in both ascending and descending sorts.
+        """
+        cols = list(self.tree["columns"])
+        if col not in cols:
+            return
+        col_index = cols.index(col)
+
+        def parse_datetime(s: str):
+            try:
+                return datetime.strptime(s.strip(), "%Y-%m-%d %H:%M:%S").timestamp()
+            except Exception:
+                return None
+
+        def parse_date(s: str):
+            try:
+                return datetime.strptime(s.strip(), "%Y-%m-%d").toordinal()
+            except Exception:
+                return None
+
+        def parse_size(s: str):
+            # Accept forms like "1.2 GB", "512 MB", "123", "123,456"
+            if s is None:
+                return None
+            if isinstance(s, (int, float)):
+                return float(s)
+            txt = str(s).strip()
+            if not txt:
+                return None
+            try:
+                return float(txt.replace(',', ''))
+            except Exception:
+                pass
+            parts = txt.split()
+            try:
+                if len(parts) == 2:
+                    num = float(parts[0])
+                    unit = parts[1].upper()
+                    units = ["B","KB","MB","GB","TB","PB","EB","ZB","YB"]
+                    if unit in units:
+                        idx = units.index(unit)
+                        return num * (1024.0 ** idx)
+            except Exception:
+                return None
+            return None
+
+        def parse_percent(s: str):
+            try:
+                if isinstance(s, str) and s.endswith('%'):
+                    return float(s[:-1])
+            except Exception:
+                pass
+            return None
+
+        def parse_duration(s: str):
+            # HH:MM:SS
+            try:
+                hh, mm, ss = str(s).split(':')
+                return int(hh) * 3600 + int(mm) * 60 + int(float(ss))
+            except Exception:
+                return None
+
+        present = []
+        missing = []
+
         for iid in self.tree.get_children(""):
             vals = self.tree.item(iid, "values")
-            key = vals[col_index]
-            try:
-                if isinstance(key, str) and key.endswith("%"):
-                    k = float(key[:-1])
-                else:
-                    k = float(str(key).replace(",",""))
-            except Exception:
-                k = str(key)
-            data.append((k, iid, vals))
-        data.sort(reverse=descending, key=lambda t: t[0])
-        for idx, (_, iid, _) in enumerate(data):
-            self.tree.move(iid, "", idx)
-        self.tree.heading(col, command=lambda c=col: self._sort_by(c, not descending))
+            raw = vals[col_index] if col_index < len(vals) else ""
+
+            key = None
+            if col in ("rec_start", "rec_end"):
+                key = parse_datetime(raw)
+            elif col == "dominant_date":
+                key = parse_date(raw)
+            elif col == "total_size":
+                key = parse_size(raw)
+            elif col == "dom_fraction":
+                key = parse_percent(raw)
+            elif col == "duration":
+                key = parse_duration(raw)
+            else:
+                # try numeric else casefold string
+                try:
+                    key = float(str(raw).replace(',', ''))
+                except Exception:
+                    key = str(raw).casefold() if raw is not None else ""
+
+            item = (iid, vals, key)
+            if key is None or key == "":
+                missing.append(item)
+            else:
+                present.append(item)
+
+        # Sort present according to key type/direction
+        present.sort(key=lambda it: it[2], reverse=descending)
+
+        # Reattach rows: present first, then missing
+        new_order = [iid for (iid, _, _) in present] + [iid for (iid, _, _) in missing]
+
+        # Reinsert in this order
+        for idx, iid in enumerate(new_order):
+            self.tree.move(iid, '', idx)
+
 
     def _selected_rows(self):
         return [r for r in self.rows if r.selected]
@@ -557,17 +799,31 @@ class App(tk.Tk):
         for r in self.rows:
             r.selected = True
             if self.tree.exists(r.folder_path):
-                vals = list(self.tree.item(r.folder_path, "values"))
-                vals[0] = "Yes"
-                self.tree.item(r.folder_path, values=vals)
+                cols = list(self.tree["columns"])
+                if "recent" in cols:
+                    idx = cols.index("recent")
+                    vals = self.tree.item(r.folder_path, "values")
+                    recent_label = vals[idx] if idx < len(vals) else "—"
+                else:
+                    days = self._parse_days_optional()
+                    recent_label, _ = self._recent_label_from_days(days, r.dominant_date, r.latest_ts)
+                self._refresh_row_in_tree(r, recent_label)
+
 
     def _select_none(self):
         for r in self.rows:
             r.selected = False
             if self.tree.exists(r.folder_path):
-                vals = list(self.tree.item(r.folder_path, "values"))
-                vals[0] = ""
-                self.tree.item(r.folder_path, values=vals)
+                cols = list(self.tree["columns"])
+                if "recent" in cols:
+                    idx = cols.index("recent")
+                    vals = self.tree.item(r.folder_path, "values")
+                    recent_label = vals[idx] if idx < len(vals) else "—"
+                else:
+                    days = self._parse_days_optional()
+                    recent_label, _ = self._recent_label_from_days(days, r.dominant_date, r.latest_ts)
+                self._refresh_row_in_tree(r, recent_label)
+
 
     # --- Stop control ---
 
@@ -678,7 +934,6 @@ class App(tk.Tk):
                     self.log("Quick metadata cancelled.")
                     break
                 if r.status == "Missing":
-                    self.log(f"[meta {i}/{total}] Skipped missing: {r.folder_name}")
                     self._progress_step(step=1, text=f"Quick metadata... {i}/{total or 1}")
                     continue
 
@@ -689,8 +944,16 @@ class App(tk.Tk):
                 r.eegno = meta.get("EegNo", "") or r.eegno
                 r.machine = meta.get("Machine", "") or r.machine
 
-                vals = self.tree.item(r.folder_path, "values")
-                recent_label = vals[8] if len(vals) > 8 else "—"
+                # Determine the current 'recent' label safely
+                cols = list(self.tree["columns"])
+                if "recent" in cols:
+                    idx = cols.index("recent")
+                    vals = self.tree.item(r.folder_path, "values")
+                    recent_label = vals[idx] if idx < len(vals) else "—"
+                else:
+                    days = self._parse_days_optional()
+                    recent_label, _ = self._recent_label_from_days(days, r.dominant_date, r.latest_ts)
+
                 self._refresh_row_in_tree(r, recent_label)
 
                 self._progress_step(step=1, text=f"Quick metadata... {i}/{total or 1}")
@@ -702,6 +965,7 @@ class App(tk.Tk):
         except Exception as e:
             self.log(f"[quick meta error] {e}")
             self._progress_done(text="Error.")
+
 
     # --- Worker: Copy ---
 
@@ -1055,6 +1319,412 @@ class App(tk.Tk):
             self.log(f"Copy script exported to {f}")
         except Exception as e:
             messagebox.showerror("Export error", str(e))
+            
+    def _on_tree_right_click(self, event):
+        # select the item under cursor; apply actions to that single item
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            self._ctx_menu.tk_popup(event.x_root, event.y_root)
+        else:
+            # click on empty area: clear selection
+            self.tree.selection_remove(self.tree.selection())
+
+    def _ctx_toggle_selected(self):
+        iids = list(self.tree.selection())
+        if not iids:
+            return
+        iid = iids[0]
+        for r in self.rows:
+            if r.folder_path == iid:
+                r.selected = not r.selected
+                cols = list(self.tree["columns"])
+                if "recent" in cols:
+                    idx = cols.index("recent")
+                    recent_label = self.tree.item(iid, "values")[idx]
+                else:
+                    days = self._parse_days_optional()
+                    recent_label, _ = self._recent_label_from_days(days, r.dominant_date, r.latest_ts)
+                self._refresh_row_in_tree(r, recent_label)
+                break
+
+    def _ctx_delete_item(self):
+        # Remove only from the table/list; do NOT delete from disk
+        iids = list(self.tree.selection())
+        if not iids:
+            return
+        iid = iids[0]
+        self.rows = [r for r in self.rows if r.folder_path != iid]
+        if self.tree.exists(iid):
+            self.tree.delete(iid)
+        self.log(f"Removed from list: {iid}")
+
+    def _ctx_refresh_selected(self):
+        iids = list(self.tree.selection())
+        if not iids:
+            return
+        iid = iids[0]
+        row = next((r for r in self.rows if r.folder_path == iid), None)
+        if not row:
+            return
+        # Recompute stats for this one folder
+        def worker():
+            try:
+                stats = analyze_folder(Path(row.folder_path), log=self.log)
+                row.dominant_date = stats.get("dominant_date","")
+                row.dom_count = stats.get("dom_count",0)
+                row.dom_fraction = stats.get("dom_fraction",0.0)
+                row.total_files = stats.get("total_files",0)
+                row.total_size = stats.get("total_size",0)
+                row.has_eeg = bool(stats.get("has_eeg",False))
+                row.latest_ts = float(stats.get("latest_ts",0.0))
+                # recent label recompute
+                days = self._parse_days_optional()
+                recent_label, _is_recent = self._recent_label_from_days(days, row.dominant_date, row.latest_ts)
+                self._refresh_row_in_tree(row, recent_label)
+                self.log(f"[refresh] {row.folder_name}: files={row.total_files} size={human_size(row.total_size)}")
+            except Exception as e:
+                self.log(f"[refresh error] {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _ctx_quick_meta_selected(self):
+        # Run quick metadata only for the selected (single) item
+        iids = list(self.tree.selection())
+        if not iids:
+            return
+        iid = iids[0]
+        row = next((r for r in self.rows if r.folder_path == iid), None)
+        if not row:
+            return
+        def worker():
+            try:
+                meta = quick_extract_metadata(Path(row.folder_path), log=self.log)
+                row.study_name = meta.get("StudyName","") or row.study_name
+                row.rec_start = meta.get("RecordingStartTime","") or row.rec_start
+                row.rec_end = meta.get("RecordingEndTime","") or row.rec_end
+                row.eegno = meta.get("EegNo","") or row.eegno
+                row.machine = meta.get("Machine","") or row.machine
+                # recent label from table (if present) else recompute quickly
+                recent_label = "—"
+                cols = list(self.tree["columns"])
+                if "recent" in cols:
+                    idx = cols.index("recent")
+                    recent_label = self.tree.item(iid, "values")[idx]
+                else:
+                    days = self._parse_days_optional()
+                    recent_label, _ = self._recent_label_from_days(days, row.dominant_date, row.latest_ts)
+                self._refresh_row_in_tree(row, recent_label)
+                self.log(f"[meta] {row.folder_name}: Start='{row.rec_start}' End='{row.rec_end}'")
+            except Exception as e:
+                self.log(f"[meta error] {e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _start_coverage_check(self):
+        rows = self._selected_rows()
+        if not rows:
+            messagebox.showinfo("Nothing selected", "Select one or more rows first.")
+            return
+        # Filter rows that have both rec_start and rec_end
+        valid = [r for r in rows if r.rec_start and r.rec_end]
+        skipped = [r for r in rows if not (r.rec_start and r.rec_end)]
+        if skipped:
+            self.log(f"[coverage] Skipping {len(skipped)} item(s) with missing metadata.")
+        threshold_hours = 23.0
+        try:
+            if hasattr(self, "_config"):
+                threshold_hours = float(self._config.get("checker", "threshold_hours", fallback="23"))
+        except Exception:
+            pass
+
+        report = self._compute_coverage_report(valid, threshold_hours)
+        self._show_coverage_report(report)
+
+    def _compute_coverage_report(self, rows, threshold_hours: float):
+        """
+        rows: list of FolderRow with rec_start/rec_end strings "YYYY-MM-DD HH:MM:SS"
+        Returns a multi-line string report.
+        """
+        from collections import defaultdict
+
+        if not rows:
+            return "No valid sessions (start/end) to evaluate."
+
+        # Build intervals and per-day contributions
+        intervals = []
+        for r in rows:
+            try:
+                t0 = datetime.strptime(r.rec_start, "%Y-%m-%d %H:%M:%S")
+                t1 = datetime.strptime(r.rec_end, "%Y-%m-%d %H:%M:%S")
+                if t1 < t0:
+                    t0, t1 = t1, t0
+                intervals.append((r.folder_name, t0, t1))
+            except Exception:
+                continue
+
+        if not intervals:
+            return "No parsable session intervals."
+
+        start_day = min(t0.date() for _, t0, _ in intervals)
+        end_day   = max(t1.date() for _, _, t1 in intervals)
+        day = start_day
+
+        per_day_seconds = {}
+        per_day_sessions = {}
+        from datetime import timedelta as _td
+        while day <= end_day:
+            day_start = datetime.combine(day, datetime.min.time())
+            day_end = day_start + _td(days=1)
+            # sum coverage seconds for this day
+            total = 0
+            ses_names = set()
+            for name, s0, s1 in intervals:
+                # intersection of [s0,s1] with [day_start, day_end]
+                a = max(s0, day_start)
+                b = min(s1, day_end)
+                if b > a:
+                    total += int((b - a).total_seconds())
+                    ses_names.add(name)
+            per_day_seconds[day] = total
+            per_day_sessions[day] = ses_names
+            day += _td(days=1)
+
+        # Missing days (no seconds at all)
+        missing_days = [d for d, secs in per_day_seconds.items() if secs == 0]
+        # Below-threshold days (keep the rule simple as requested: 23 h for all days)
+        fails = [d for d, secs in per_day_seconds.items() if secs < int(threshold_hours*3600)]
+
+        # Multiple sessions per day
+        multi = [d for d, names in per_day_sessions.items() if len(names) > 1]
+
+        # Build report
+        lines = []
+        lines.append(f"Coverage window: {start_day.isoformat()}  →  {end_day.isoformat()}")
+        lines.append(f"Threshold: {threshold_hours:.2f} h/day")
+        lines.append("")
+        lines.append("Per-day totals:")
+        for d in sorted(per_day_seconds.keys()):
+            secs = per_day_seconds[d]
+            hours = secs/3600.0
+            flag = ""
+            if d in missing_days:
+                flag = "  [MISSING]"
+            elif d in fails:
+                flag = "  [< threshold]"
+            if d in multi:
+                flag += "  [MULTIPLE SESSIONS]"
+            lines.append(f"  {d.isoformat()}  {hours:6.2f} h{flag}")
+        lines.append("")
+        if missing_days:
+            lines.append(f"Missing days ({len(missing_days)}): " + ", ".join(d.isoformat() for d in sorted(missing_days)))
+        else:
+            lines.append("Missing days: none")
+        if fails:
+            lines.append(f"Below-threshold days ({len(fails)}): " + ", ".join(d.isoformat() for d in sorted(fails)))
+        else:
+            lines.append("Below-threshold days: none")
+        if multi:
+            lines.append(f"Days with multiple sessions ({len(multi)}): " + ", ".join(d.isoformat() for d in sorted(multi)))
+        else:
+            lines.append("Days with multiple sessions: none")
+
+        return "\n".join(lines)
+
+    def _show_coverage_report(self, text: str):
+        # Simple dialog with a re-check button
+        win = tk.Toplevel(self)
+        win.title("Coverage Check (Selected)")
+        win.geometry("800x520")
+        txt = tk.Text(win, wrap="word")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", text)
+        txt.configure(state="disabled")
+        btn = ttk.Button(win, text="Re-check", command=lambda: self._coverage_recheck_into(txt))
+        btn.pack(pady=6)
+
+    def _coverage_recheck_into(self, text_widget):
+        # Recompute against current selection and replace the text
+        rows = self._selected_rows()
+        valid = [r for r in rows if r.rec_start and r.rec_end]
+        threshold_hours = 23.0
+        try:
+            if hasattr(self, "_config"):
+                threshold_hours = float(self._config.get("checker", "threshold_hours", fallback="23"))
+        except Exception:
+            pass
+        report = self._compute_coverage_report(valid, threshold_hours)
+        text_widget.configure(state="normal")
+        text_widget.delete("1.0", "end")
+        text_widget.insert("1.0", report)
+        text_widget.configure(state="disabled")
+        self.log("Coverage re-checked.")
+
+    def _export_copy_script(self):
+        dest = self.var_dest.get().strip()
+        if not dest:
+            messagebox.showerror("Destination required", "Choose a destination folder first.")
+            return
+        rows = self._selected_rows()
+        if not rows:
+            messagebox.showinfo("Nothing selected", "Select one or more rows first.")
+            return
+
+        # Default filename in destination (main script only)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"copy_selected_{ts}.py"
+        initial_dir = dest if os.path.isdir(dest) else None
+
+        f = filedialog.asksaveasfilename(
+            title="Save main script",
+            initialdir=initial_dir,
+            initialfile=default_name,
+            defaultextension=".py",
+            filetypes=[("Python", "*.py"), ("All files", "*.*")]
+        )
+        if not f:
+            return
+        dest_base = dest
+        move_mode = bool(self.var_script_move.get())
+
+        # Prepare items
+        present_items = []
+        missing_items = []
+        for r in rows:
+            p = r.folder_path
+            if os.path.isdir(p):
+                present_items.append((r.folder_name, p))
+            else:
+                missing_items.append((r.folder_name, p))
+
+        # CSV path (same folder, paired name)
+        base_no_ext = os.path.splitext(f)[0]
+        csv_path = base_no_ext + "_items.csv"
+
+        # Write CSV list
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as cfh:
+                w = csv.writer(cfh)
+                w.writerow(["src_path", "dest_subfolder_name"])
+                for name, src in present_items:
+                    w.writerow([os.path.abspath(src), name])
+            self.log(f"Exported items CSV: {csv_path}")
+            if missing_items:
+                self.log(f"Missing at export time (not in CSV): {len(missing_items)}")
+        except Exception as e:
+            messagebox.showerror("Export error", f"Failed to write CSV:\n{e}")
+            return
+
+        # Write main script
+        try:
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write(self._generate_copy_script_main_two_part(dest_base, move_mode, csv_path, missing_items))
+            self.log(f"Exported main script: {f}")
+        except Exception as e:
+            messagebox.showerror("Export error", f"Failed to write main script:\n{e}")
+            return
+
+    def _generate_copy_script_main_two_part(self, dest_base, move_mode, csv_path, missing_items):
+        """
+        Returns the text of the standalone main script that reads a CSV list of items to process.
+        """
+        dest_base = os.path.abspath(dest_base)
+        lines = []
+        lines.append("#!/usr/bin/env python3")
+        lines.append("# -*- coding: utf-8 -*-")
+        lines.append("")
+        lines.append("# Auto-generated by Natus Session Finder GUI")
+        lines.append("# This script will {} selected folders into DEST_BASE, excluding certain extensions.".format("MOVE" if move_mode else "COPY"))
+        lines.append("")
+        lines.append("import os, sys, csv, shutil")
+        lines.append("from pathlib import Path")
+        lines.append("")
+        lines.append(f"DEST_BASE = r'''{dest_base}'''")
+        lines.append(f"MOVE_MODE = {str(move_mode)}  # True = move, False = copy")
+        lines.append("EXCLUDE_EXTS = ['.avi']  # Edit this list if needed")
+        lines.append("")
+        lines.append("# CSV list of items to process (src_path, dest_subfolder_name)")
+        lines.append(f"ITEMS_CSV = r'''{os.path.abspath(csv_path)}'''")
+        lines.append("")
+        if missing_items:
+            lines.append("# The following were missing at export time (not in CSV):")
+            for name, src in missing_items:
+                lines.append(f"#    MISSING: {name}  ({src})")
+            lines.append("")
+        lines.append("def ensure_dir(p: Path):")
+        lines.append("    p.mkdir(parents=True, exist_ok=True)")
+        lines.append("")
+        lines.append("def copy_file(src: Path, dst: Path):")
+        lines.append("    dst.parent.mkdir(parents=True, exist_ok=True)")
+        lines.append("    shutil.copy2(src, dst)")
+        lines.append("")
+        lines.append("def process_folder(src_root: Path, dest_root: Path):")
+        lines.append("    for root, dirs, files in os.walk(src_root):")
+        lines.append("        rp = Path(root)")
+        lines.append("        rel = rp.relative_to(src_root)")
+        lines.append("        out_dir = dest_root / rel")
+        lines.append("        ensure_dir(out_dir)")
+        lines.append("        for fn in files:")
+        lines.append("            s = rp / fn")
+        lines.append("            if s.suffix.lower() in [e.lower() for e in EXCLUDE_EXTS]:")
+        lines.append("                continue")
+        lines.append("            d = out_dir / fn")
+        lines.append("            if MOVE_MODE:")
+        lines.append("                print(f\"MOVE  {s} -> {d}\")")
+        lines.append("                d.parent.mkdir(parents=True, exist_ok=True)")
+        lines.append("                try:")
+        lines.append("                    s.replace(d)")
+        lines.append("                except Exception:")
+        lines.append("                    # fallback to copy+unlink if cross-device")
+        lines.append("                    copy_file(s, d)")
+        lines.append("                    try: s.unlink()")
+        lines.append("                    except Exception: pass")
+        lines.append("            else:")
+        lines.append("                print(f\"COPY  {s} -> {d}\")")
+        lines.append("                copy_file(s, d)")
+        lines.append("")
+        lines.append("def load_items(csv_path: Path):")
+        lines.append("    items = []")
+        lines.append("    with open(csv_path, 'r', encoding='utf-8') as fh:")
+        lines.append("        rdr = csv.reader(fh)")
+        lines.append("        header = next(rdr, None)")
+        lines.append("        for row in rdr:")
+        lines.append("            if not row: continue")
+        lines.append("            src = Path(row[0]).expanduser()")
+        lines.append("            name = row[1]")
+        lines.append("            items.append((src, name))")
+        lines.append("    return items")
+        lines.append("")
+        lines.append("def main():")
+        lines.append("    dest = Path(DEST_BASE).resolve()")
+        lines.append("    ensure_dir(dest)")
+        lines.append("    csv_p = Path(ITEMS_CSV)")
+        lines.append("    if not csv_p.is_absolute():")
+        lines.append("        # resolve relative to the script location")
+        lines.append("        csv_p = Path(__file__).resolve().parent / csv_p")
+        lines.append("    items = load_items(csv_p)")
+        lines.append("    for src, dest_name in items:")
+        lines.append("        if not src.exists():")
+        lines.append("            print(f\"MISSING (skip): {src}\")")
+        lines.append("            continue")
+        lines.append("        target = dest / dest_name")
+        lines.append("        # Resolve name collision by appending _copyN if needed")
+        lines.append("        t = target")
+        lines.append("        n = 1")
+        lines.append("        while t.exists():")
+        lines.append("            t = Path(str(target) + f\"_copy{n}\")")
+        lines.append("            n += 1")
+        lines.append("        print(f\"PROCESS: {src} -> {t}  (mode={'MOVE' if MOVE_MODE else 'COPY'})\")")
+        lines.append("        ensure_dir(t)")
+        lines.append("        process_folder(src, t)")
+        lines.append("")
+        lines.append("if __name__ == '__main__':")
+        lines.append("    try:")
+        lines.append("        main()")
+        lines.append("    except KeyboardInterrupt:")
+        lines.append("        print('Interrupted.')")
+        lines.append("")
+        return '\n'.join(lines)
+
 
     def _generate_copy_script(self, dest_base, present_items, missing_items, move_mode):
         """
