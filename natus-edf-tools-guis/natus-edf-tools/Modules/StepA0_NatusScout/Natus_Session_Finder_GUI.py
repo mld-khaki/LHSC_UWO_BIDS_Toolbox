@@ -2160,14 +2160,22 @@ class App(tk.Tk):
         return "\n".join(lines)
 
     def _build_gantt_figure(self, bars_by_day, per_day, tick_hours=None):
-        import hashlib
+        """
+        Build the Gantt figure with:
+          - Unique, deterministic color PER FOLDER (session) across the whole chart
+            so each different session gets a distinct color, and split/multi-day
+            segments of the same session stay the same color.
+          - Faint per-day union overlay
+          - Click to show info; click on empty space to close info
+          - Optional mpld3 tooltips support via invisible scatter
+        """
         import matplotlib
-        matplotlib.use("Agg")  # embed in Tk; canvas handles drawing
+        matplotlib.use("Agg")  # embed in Tk; TkAgg canvas wraps drawing
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
-        from datetime import datetime
+        import colorsys
 
-        # Settings
+        # ---- Settings
         show_grid = True
         dpi = 150
         fig_w = 1200
@@ -2186,17 +2194,16 @@ class App(tk.Tk):
             pass
         tick_hours = max(1, int(tick_hours))
 
-        # Figure
+        # ---- Figure / Axes
         fig = plt.Figure(figsize=(max(4, fig_w/96), max(3, fig_h/96)), dpi=dpi)
         ax = fig.add_subplot(111)
 
-        # Days
+        # ---- Collect days and compute x-limits
         days = sorted(bars_by_day.keys())
         if not days:
             ax.text(0.5, 0.5, "No data", ha="center", va="center")
             return fig
 
-        # Limits
         all_starts, all_ends = [], []
         for d in days:
             for b in bars_by_day[d]:
@@ -2206,45 +2213,69 @@ class App(tk.Tk):
                 all_starts.append(s); all_ends.append(e)
         xmin, xmax = min(all_starts), max(all_ends)
 
-        # Y map
+        # ---- Y axis mapping (one row per day)
         y_positions = {d: i for i, d in enumerate(days)}
         y_labels = [d.isoformat() for d in days]
 
-        # Deterministic color per folder (stable across runs)
-        try:
-            palette = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
-        except Exception:
-            palette = []
-        if not palette:
-            palette = ["#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F","#EDC949",
-                       "#AF7AA1","#FF9DA7","#9C755F","#BAB0AC"]
-        def color_for(folder_name: str):
-            h = int(hashlib.md5(folder_name.encode("utf-8")).hexdigest(), 16)
-            return palette[h % len(palette)]
+        # ---- UNIQUE color per folder (session), consistent across all days
+        # Gather all unique folder names present in the visible data
+        unique_folders = []
+        seen = set()
+        for d in days:
+            for b in bars_by_day[d]:
+                f = b["folder"]
+                if f not in seen:
+                    seen.add(f)
+                    unique_folders.append(f)
 
-        # Faint union overlay
+        # Try to use Matplotlib base cycle first, then generate more colors if needed
+        base_cycle = []
+        try:
+            base_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        except Exception:
+            base_cycle = []
+        # Ensure we have at least N distinct colors
+        N = len(unique_folders)
+        colors_list = list(base_cycle[:N]) if len(base_cycle) >= N else list(base_cycle)
+        if len(colors_list) < N:
+            # Generate additional distinct colors in HSV and append
+            needed = N - len(colors_list)
+            # Evenly spaced hues with medium saturation/value
+            gen = []
+            for i in range(needed):
+                h = i / max(1, needed)   # 0..1
+                s = 0.65
+                v = 0.9
+                r, g, b = colorsys.hsv_to_rgb(h, s, v)
+                gen.append((r, g, b))
+            colors_list.extend(gen)
+
+        folder_color = {folder: colors_list[i] for i, folder in enumerate(unique_folders)}
+
+        # ---- Faint union overlay (background)
         for d in days:
             y = y_positions[d]
             for s, e in per_day[d]["union"]:
-                ax.barh(y=y,
-                        width=(mdates.date2num(e) - mdates.date2num(s)),
-                        left=mdates.date2num(s),
-                        height=0.6, alpha=0.15, align='center')
+                ax.barh(
+                    y=y,
+                    width=(mdates.date2num(e) - mdates.date2num(s)),
+                    left=mdates.date2num(s),
+                    height=0.6, alpha=0.15, align='center'
+                )
 
-        # Bars + meta
+        # ---- Draw session bars with the per-folder color map
         bar_rects = []
         bar_meta = []
-        point_x = []   # midpoints for HTML tooltips
-        point_y = []
-        point_labels = []
+        point_x, point_y, point_labels = [], [], []
         for d in days:
             y = y_positions[d]
             for b in bars_by_day[d]:
                 left = mdates.date2num(b["start_dt"])
                 width = mdates.date2num(b["end_dt"]) - left
+                c = folder_color.get(b["folder"], None)
                 rects = ax.barh(
                     y=y, width=width, left=left, height=0.35, align='center',
-                    picker=5, color=color_for(b["folder"])
+                    picker=5, color=c
                 )
                 rect = rects[0]
                 bar_rects.append(rect)
@@ -2257,7 +2288,7 @@ class App(tk.Tk):
                     "study_name": b["study_name"]
                 }
                 bar_meta.append(meta)
-                # midpoint used for HTML tooltips
+                # midpoint used for HTML tooltips (mpld3)
                 point_x.append(left + width/2.0)
                 point_y.append(y)
                 s_txt = meta["start"].strftime("%Y-%m-%d %H:%M:%S")
@@ -2267,7 +2298,7 @@ class App(tk.Tk):
                     f"EegNo={meta['eegno']} &nbsp;&nbsp; StudyName={meta['study_name']}"
                 )
 
-        # Axes format
+        # ---- Axes formatting
         ax.set_yticks(list(y_positions.values()))
         ax.set_yticklabels(y_labels)
         ax.set_ylim(-1, len(days))
@@ -2280,7 +2311,7 @@ class App(tk.Tk):
         ax.set_xlabel("Time")
         ax.set_ylabel("Date")
 
-        # Click-to-show tooltip in Tk (annotation)
+        # ---- Click-to-show info (Tk) and click blank to close
         annot = ax.annotate(
             "", xy=(0,0), xytext=(20,20), textcoords="offset points",
             bbox=dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9),
@@ -2306,7 +2337,7 @@ class App(tk.Tk):
                 fig.canvas.draw_idle()
 
         def on_click(event):
-            # If click not on any rect: hide annotation (close “info” bubble)
+            # If click not on any rect: hide annotation (close info)
             if not event.inaxes:
                 return
             hit = False
@@ -2322,15 +2353,16 @@ class App(tk.Tk):
         fig.canvas.mpl_connect("pick_event", on_pick)
         fig.canvas.mpl_connect("button_press_event", on_click)
 
-        # Store hidden scatter + labels for HTML export via mpld3 (tooltips)
+        # ---- Invisible scatter for HTML tooltips (mpld3)
         try:
-            sc = ax.scatter(point_x, point_y, alpha=0.0)  # invisible handles
+            sc = ax.scatter(point_x, point_y, alpha=0.0)  # invisible anchors
             fig._tooltip_scatter = sc
             fig._tooltip_labels = point_labels
         except Exception:
             pass
 
         return fig
+
 
 
     def _coverage_recheck_window(self, win):
