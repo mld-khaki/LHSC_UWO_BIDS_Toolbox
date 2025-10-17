@@ -1704,38 +1704,67 @@ class App(tk.Tk):
         # Build window
         win = tk.Toplevel(self)
         win.title("Coverage & Gantt (Selected)")
-        win.geometry("1100x800")
+        win.geometry("1200x820")
 
-        # Top: controls
+        # --- Top control row
         topf = ttk.Frame(win)
         topf.pack(fill="x", padx=8, pady=6)
+
         ttk.Button(topf, text="Re-check", command=lambda: self._coverage_recheck_window(win)).pack(side="left", padx=4)
         ttk.Button(topf, text="Save… (PNG + TSV)", command=lambda: self._save_gantt_and_tsv(win)).pack(side="left", padx=4)
+        ttk.Button(topf, text="Save Interactive (HTML)", command=lambda: self._save_gantt_interactive(win)).pack(side="left", padx=4)
 
-        # Middle: report text
-        repf = ttk.LabelFrame(win, text="Coverage report")
-        repf.pack(fill="both", expand=True, padx=8, pady=6)
+        ttk.Label(topf, text=" | ").pack(side="left", padx=2)
+        ttk.Button(topf, text="Tick −", command=lambda: self._change_tick_hours(win, -1)).pack(side="left", padx=(6,2))
+        ttk.Button(topf, text="Tick +", command=lambda: self._change_tick_hours(win, +1)).pack(side="left", padx=2)
+        win._tick_label_var = tk.StringVar(value="")
+        ttk.Label(topf, textvariable=win._tick_label_var).pack(side="left", padx=8)
+
+        ttk.Label(topf, text=" | ").pack(side="left", padx=2)
+        ttk.Button(topf, text="Gantt ↑", command=lambda: self._nudge_gantt_height(win, -80)).pack(side="left", padx=2)
+        ttk.Button(topf, text="Gantt ↓", command=lambda: self._nudge_gantt_height(win, +80)).pack(side="left", padx=2)
+
+        # --- Paned window (draggable sash between report and chart)
+        paned = ttk.Panedwindow(win, orient="vertical")
+        paned.pack(fill="both", expand=True, padx=8, pady=(0,8))
+
+        repf = ttk.LabelFrame(paned, text="Coverage report")
+        ganttf = ttk.LabelFrame(paned, text="Gantt (grouped by date)")
+        paned.add(repf, weight=1)
+        paned.add(ganttf, weight=2)
+
+        # Report text
         txt = tk.Text(repf, wrap="word")
         txt.pack(fill="both", expand=True)
         txt.insert("1.0", report_text)
         txt.configure(state="disabled")
 
-        # Bottom: Gantt
-        ganttf = ttk.LabelFrame(win, text="Gantt (grouped by date)")
-        ganttf.pack(fill="both", expand=True, padx=8, pady=(0,8))
+        # Build Gantt figure with current tick hours
+        try:
+            tick_hours = int(self._config.get("gantt", "gantt_tick_hours", fallback="1"))
+        except Exception:
+            tick_hours = 1
+        win._gantt_tick_hours = max(1, tick_hours)
 
-        fig = self._build_gantt_figure(bars_by_day, per_day)
+        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=win._gantt_tick_hours)
         canvas = FigureCanvasTkAgg(fig, master=ganttf)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
+        canvas_widget = canvas.get_tk_widget()
+        canvas_widget.pack(fill="both", expand=True)
 
-        # Stash data on window for re-check/save hooks
+        # Update tick label text
+        win._tick_label_var.set(f"Tick: {win._gantt_tick_hours} h")
+
+        # Stash state for re-check/save/resize controls
         win._coverage_text = txt
         win._coverage_fig = fig
         win._coverage_canvas = canvas
+        win._coverage_canvas_widget = canvas_widget
+        win._coverage_paned = paned
         win._coverage_bars_by_day = bars_by_day
         win._coverage_per_day = per_day
         win._coverage_threshold = threshold_hours
+
 
     def _generate_copy_script_main_two_part(self, dest_base, move_mode, csv_path, missing_items):
         """
@@ -2130,114 +2159,142 @@ class App(tk.Tk):
         lines.append("")
         return "\n".join(lines)
 
-    def _build_gantt_figure(self, bars_by_day, per_day):
+    def _build_gantt_figure(self, bars_by_day, per_day, tick_hours=None):
+        import hashlib
         import matplotlib
-        matplotlib.use("Agg")  # ensure non-interactive backend for embedding; TkAgg via canvas handles drawing
+        matplotlib.use("Agg")  # embed in Tk; canvas handles drawing
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         from datetime import datetime
 
-        # INI settings
+        # Settings
         show_grid = True
-        tick_hours = 4
         dpi = 150
         fig_w = 1200
         fig_h = 700
+        if tick_hours is None:
+            try:
+                tick_hours = int(self._config.get("gantt", "gantt_tick_hours", fallback="1"))
+            except Exception:
+                tick_hours = 1
         try:
             show_grid = self._config.getboolean("gantt", "gantt_show_grid", fallback=True)
-            tick_hours = int(self._config.get("gantt", "gantt_tick_hours", fallback="1"))
             dpi = int(self._config.get("gantt", "gantt_dpi", fallback="150"))
             fig_w = int(self._config.get("gantt", "gantt_width", fallback="1200"))
             fig_h = int(self._config.get("gantt", "gantt_height", fallback="700"))
         except Exception:
             pass
+        tick_hours = max(1, int(tick_hours))
 
-        # Convert pixels to inches for Matplotlib
+        # Figure
         fig = plt.Figure(figsize=(max(4, fig_w/96), max(3, fig_h/96)), dpi=dpi)
         ax = fig.add_subplot(111)
 
-        # Prepare y-axis days
+        # Days
         days = sorted(bars_by_day.keys())
         if not days:
             ax.text(0.5, 0.5, "No data", ha="center", va="center")
             return fig
 
-        # X limits from global min/max
-        all_starts = []
-        all_ends = []
+        # Limits
+        all_starts, all_ends = [], []
         for d in days:
             for b in bars_by_day[d]:
                 all_starts.append(b["start_dt"])
                 all_ends.append(b["end_dt"])
-            for s,e in per_day[d]["union"]:
-                all_starts.append(s)
-                all_ends.append(e)
-        xmin = min(all_starts)
-        xmax = max(all_ends)
+            for s, e in per_day[d]["union"]:
+                all_starts.append(s); all_ends.append(e)
+        xmin, xmax = min(all_starts), max(all_ends)
 
-        # Map day -> y position
+        # Y map
         y_positions = {d: i for i, d in enumerate(days)}
         y_labels = [d.isoformat() for d in days]
 
-        # Draw faint union overlay (background)
-        union_patches = []
+        # Deterministic color per folder (stable across runs)
+        try:
+            palette = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        except Exception:
+            palette = []
+        if not palette:
+            palette = ["#4E79A7","#F28E2B","#E15759","#76B7B2","#59A14F","#EDC949",
+                       "#AF7AA1","#FF9DA7","#9C755F","#BAB0AC"]
+        def color_for(folder_name: str):
+            h = int(hashlib.md5(folder_name.encode("utf-8")).hexdigest(), 16)
+            return palette[h % len(palette)]
+
+        # Faint union overlay
         for d in days:
             y = y_positions[d]
             for s, e in per_day[d]["union"]:
-                ax.barh(y=y, width=(mdates.date2num(e) - mdates.date2num(s)),
-                        left=mdates.date2num(s), height=0.6, alpha=0.15, align='center')
+                ax.barh(y=y,
+                        width=(mdates.date2num(e) - mdates.date2num(s)),
+                        left=mdates.date2num(s),
+                        height=0.6, alpha=0.15, align='center')
 
-        # Draw session bars and keep metadata for click
+        # Bars + meta
         bar_rects = []
-        bar_meta = []  # dict per bar for tooltip
+        bar_meta = []
+        point_x = []   # midpoints for HTML tooltips
+        point_y = []
+        point_labels = []
         for d in days:
             y = y_positions[d]
-            bars = bars_by_day[d]
-            for b in bars:
+            for b in bars_by_day[d]:
                 left = mdates.date2num(b["start_dt"])
                 width = mdates.date2num(b["end_dt"]) - left
-                rects = ax.barh(y=y, width=width, left=left, height=0.35, align='center', picker=5)
+                rects = ax.barh(
+                    y=y, width=width, left=left, height=0.35, align='center',
+                    picker=5, color=color_for(b["folder"])
+                )
                 rect = rects[0]
                 bar_rects.append(rect)
-                bar_meta.append({
+                meta = {
                     "date": d,
                     "folder": b["folder"],
                     "start": b["start_dt"],
                     "end": b["end_dt"],
                     "eegno": b["eegno"],
                     "study_name": b["study_name"]
-                })
+                }
+                bar_meta.append(meta)
+                # midpoint used for HTML tooltips
+                point_x.append(left + width/2.0)
+                point_y.append(y)
+                s_txt = meta["start"].strftime("%Y-%m-%d %H:%M:%S")
+                e_txt = meta["end"].strftime("%Y-%m-%d %H:%M:%S")
+                point_labels.append(
+                    f"<b>{meta['folder']}</b><br/>{s_txt} → {e_txt}<br/>"
+                    f"EegNo={meta['eegno']} &nbsp;&nbsp; StudyName={meta['study_name']}"
+                )
 
-        # Axis formatting
+        # Axes format
         ax.set_yticks(list(y_positions.values()))
         ax.set_yticklabels(y_labels)
         ax.set_ylim(-1, len(days))
         ax.set_xlim(mdates.date2num(xmin), mdates.date2num(xmax))
-        ax.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, tick_hours)))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=tick_hours))
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
         if show_grid:
             ax.grid(True, axis="x", linestyle="--", alpha=0.3)
         fig.autofmt_xdate()
-
         ax.set_xlabel("Time")
         ax.set_ylabel("Date")
 
-        # Click-to-show tooltip (annotation)
-        annot = ax.annotate("", xy=(0,0), xytext=(20,20),
-                            textcoords="offset points", bbox=dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9),
-                            arrowprops=dict(arrowstyle="->"))
+        # Click-to-show tooltip in Tk (annotation)
+        annot = ax.annotate(
+            "", xy=(0,0), xytext=(20,20), textcoords="offset points",
+            bbox=dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9),
+            arrowprops=dict(arrowstyle="->")
+        )
         annot.set_visible(False)
 
         def _format_meta(i):
             m = bar_meta[i]
             s = m["start"].strftime("%Y-%m-%d %H:%M:%S")
             e = m["end"].strftime("%Y-%m-%d %H:%M:%S")
-            return (f"{m['folder']}\n"
-                    f"{s} → {e}\n"
-                    f"EegNo={m['eegno']}  StudyName={m['study_name']}")
+            return (f"{m['folder']}\n{s} → {e}\nEegNo={m['eegno']}  StudyName={m['study_name']}")
 
         def on_pick(event):
-            # Find which rect
             if event.artist in bar_rects:
                 i = bar_rects.index(event.artist)
                 rect = bar_rects[i]
@@ -2249,16 +2306,32 @@ class App(tk.Tk):
                 fig.canvas.draw_idle()
 
         def on_click(event):
-            # Hide annotation if click on empty space
+            # If click not on any rect: hide annotation (close “info” bubble)
             if not event.inaxes:
                 return
-            if event.button == 1 and (event.xdata is not None and event.ydata is not None):
-                # keep as-is; pick event shows info, otherwise hide
-                pass
+            hit = False
+            for r in bar_rects:
+                contains, _ = r.contains(event)
+                if contains:
+                    hit = True
+                    break
+            if not hit:
+                annot.set_visible(False)
+                fig.canvas.draw_idle()
 
         fig.canvas.mpl_connect("pick_event", on_pick)
         fig.canvas.mpl_connect("button_press_event", on_click)
+
+        # Store hidden scatter + labels for HTML export via mpld3 (tooltips)
+        try:
+            sc = ax.scatter(point_x, point_y, alpha=0.0)  # invisible handles
+            fig._tooltip_scatter = sc
+            fig._tooltip_labels = point_labels
+        except Exception:
+            pass
+
         return fig
+
 
     def _coverage_recheck_window(self, win):
         # Recompute from current selection and refresh both widgets
@@ -2278,25 +2351,27 @@ class App(tk.Tk):
         per_day = self._compute_union_and_flags(bars_by_day, threshold_hours)
         report = self._make_coverage_report(bars_by_day, per_day, threshold_hours)
 
-        # Update text
+        # Update report text
         txt = win._coverage_text
         txt.configure(state="normal")
         txt.delete("1.0", "end")
         txt.insert("1.0", report)
         txt.configure(state="disabled")
 
-        # Update chart
-        fig = self._build_gantt_figure(bars_by_day, per_day)
+        # Rebuild chart, preserving current tick hours
+        tick_hours = getattr(win, "_gantt_tick_hours", 1)
+        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=max(1, int(tick_hours)))
         canvas = win._coverage_canvas
         win._coverage_fig = fig
         canvas.figure = fig
         canvas.draw()
 
-        # Stash updated data
+        # Update state
         win._coverage_bars_by_day = bars_by_day
         win._coverage_per_day = per_day
         win._coverage_threshold = threshold_hours
         self.log("Coverage re-checked.")
+
 
 
     def _save_gantt_and_tsv(self, win):
@@ -2307,7 +2382,7 @@ class App(tk.Tk):
         bars_by_day = win._coverage_bars_by_day
         per_day = win._coverage_per_day
 
-        # Prompt for base name (PNG); we will also save TSV next to it
+        # Prompt for base name; write .png and .tsv
         f = filedialog.asksaveasfilename(
             title="Save Gantt (choose base name)",
             defaultextension=".png",
@@ -2366,6 +2441,97 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Save error", f"Failed to save TSV:\n{e}")
             return
+
+    def _save_gantt_interactive(self, win):
+        import os
+        from tkinter import filedialog, messagebox
+        try:
+            import mpld3
+            from mpld3 import plugins
+        except Exception:
+            messagebox.showinfo(
+                "Interactive export",
+                "To save an interactive HTML, please install mpld3:\n\n    pip install mpld3"
+            )
+            return
+
+        f = filedialog.asksaveasfilename(
+            title="Save Interactive Gantt (HTML)",
+            defaultextension=".html",
+            filetypes=[("HTML", "*.html"), ("All files", "*.*")]
+        )
+        if not f:
+            return
+
+        fig = win._coverage_fig
+
+        # Attach tooltips to the invisible scatter we created in _build_gantt_figure
+        try:
+            sc = getattr(fig, "_tooltip_scatter", None)
+            labels = getattr(fig, "_tooltip_labels", None)
+            if sc is not None and labels:
+                tooltip = plugins.PointHTMLTooltip(sc, labels=labels, voffset=10, hoffset=10, css=None)
+                plugins.connect(fig, tooltip)
+            # Basic zoom/pan are included by mpld3 by default
+        except Exception:
+            pass
+
+        # Get the report text
+        try:
+            report_text = win._coverage_text.get("1.0", "end-1c")
+        except Exception:
+            report_text = ""
+
+        try:
+            html_fig = mpld3.fig_to_html(fig)
+            html = f"""<!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <title>Interactive Gantt</title>
+    <style>
+    body {{ font-family: sans-serif; }}
+    pre {{ background:#f7f7f7; padding:10px; border:1px solid #ddd; }}
+    </style>
+    </head>
+    <body>
+    <h2>Coverage report</h2>
+    <pre>{report_text}</pre>
+    <h2>Gantt</h2>
+    {html_fig}
+    </body>
+    </html>
+    """
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write(html)
+            self.log(f"Saved interactive Gantt HTML: {f}")
+        except Exception as e:
+            messagebox.showerror("Save error", f"Failed to save HTML:\n{e}")
+
+    def _change_tick_hours(self, win, delta):
+        # Update tick size and rebuild the chart
+        try:
+            win._gantt_tick_hours = max(1, int(win._gantt_tick_hours) + int(delta))
+        except Exception:
+            win._gantt_tick_hours = 1
+        win._tick_label_var.set(f"Tick: {win._gantt_tick_hours} h")
+
+        bars_by_day = win._coverage_bars_by_day
+        per_day = win._coverage_per_day
+        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=win._gantt_tick_hours)
+        win._coverage_fig = fig
+        win._coverage_canvas.figure = fig
+        win._coverage_canvas.draw()
+
+    def _nudge_gantt_height(self, win, delta_pixels):
+        # Move the sash between report and chart by a few pixels
+        paned = win._coverage_paned
+        try:
+            cur = paned.sashpos(0)
+            new_pos = max(80, cur + int(delta_pixels))
+            paned.sashpos(0, new_pos)
+        except Exception:
+            pass
 
 # ---- main ----
 
