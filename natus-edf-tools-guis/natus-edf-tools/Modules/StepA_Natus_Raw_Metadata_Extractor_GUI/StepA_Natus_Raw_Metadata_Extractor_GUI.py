@@ -2,10 +2,54 @@
 # -*- coding: utf-8 -*-
 
 """
-Natus Session Finder GUI Version 1.1
-Author: Dr. Milad Khaki 
-Latest update: 2025/10/16 
+    Natus Session Finder GUI Version 1.2
+
+    Author: Dr. Milad Khaki 
+
+    Latest update: 2025/10/17
 ------------------------
+
+What’s new in Version 1.2
+
+* Coverage checker improvements
+    - Now computes **unique per-day coverage** as the union of intervals (not the sum).
+    - First and last days are no longer flagged for <23 h coverage.
+    - Added detection and tagging for:
+        = **Multiple sessions per day**
+        = **Overlapping sessions** (time overlap)
+        = **Below-threshold coverage** (< 23 h in middle days)
+    - Inline detailed report includes:
+        = Folder, RecStart, RecEnd, EegNo, StudyName (times clipped per day)
+        = [OVERLAP] marker where sessions overlap
+    - Added faint overlay for per-day union coverage visualization.
+
+* Gantt chart visualization
+    - New **“Show Coverage (Selected)”** button generates both:
+        = The per-day textual report
+        = A Gantt-style chart of selected sessions
+    - Sessions spanning multiple days are clipped appropriately.
+    - Bars grouped **by date**, with click tooltips showing Folder, Start, End, EegNo, StudyName.
+    - Save dialog prompts for base name and exports both:
+        = `<basename>_gantt.png` (chart)
+        = `<basename>_gantt.tsv` (clipped intervals, with overlap/multiple/below-threshold flags)
+
+* INI-based configuration extended
+    - Added `[gantt]` section:
+        = gantt_show_grid = true
+        = gantt_tick_hours = 1
+        = coverage_show_details = inline
+        = gantt_dpi = 150
+        = gantt_width = 1200
+        = gantt_height = 700
+    - [checker] keeps threshold_hours = 23.
+    - Coverage and Gantt behaviors now respect these settings.
+
+* Additional updates
+    - Report sections now include “Details for days with multiple sessions” inline.
+    - Improved log output with overlap and coverage summaries.
+    - Duration, sorting, and INI-based column visibility retained from Version 1.1.
+    - Minor UI and performance optimizations for refresh and re-check cycles.
+
 
 What’s new in Version 1.1
 
@@ -360,6 +404,7 @@ class App(tk.Tk):
         self.progress_label.grid(row=0, column=1, sticky="w", padx=10)
 
         # --- Configuration (INI) ---
+        from pathlib import Path
         self._ini_path = Path(__file__).with_suffix(".ini")
         self._config = configparser.ConfigParser()
         default_columns = [
@@ -371,6 +416,14 @@ class App(tk.Tk):
         if not self._ini_path.exists():
             self._config["columns"] = {c: "true" for c in default_columns}
             self._config["checker"] = {"threshold_hours": "23"}
+            self._config["gantt"] = {
+                "gantt_show_grid": "true",
+                "gantt_tick_hours": "1",
+                "coverage_show_details": "inline",
+                "gantt_dpi": "150",
+                "gantt_width": "1200",
+                "gantt_height": "700"
+            }
             try:
                 with open(self._ini_path, "w") as fh:
                     self._config.write(fh)
@@ -382,6 +435,15 @@ class App(tk.Tk):
             self._config["columns"] = {c: "true" for c in default_columns}
         if "checker" not in self._config:
             self._config["checker"] = {"threshold_hours": "23"}
+        if "gantt" not in self._config:
+            self._config["gantt"] = {
+                "gantt_show_grid": "true",
+                "gantt_tick_hours": "1",
+                "coverage_show_details": "inline",
+                "gantt_dpi": "150",
+                "gantt_width": "1200",
+                "gantt_height": "700"
+            }
 
         # Columns to show
         enabled_cols = []
@@ -442,7 +504,7 @@ class App(tk.Tk):
         self.tree.bind("<Double-1>", self._toggle_selected_event)
         # Right-click context menu
         self.tree.bind("<Button-3>", self._on_tree_right_click)
-        # Space toggles selection for focused row or all highlighted rows
+        # Space toggles selection
         self.tree.bind("<space>", self._space_toggle)
         self.tree.focus_set()
 
@@ -471,6 +533,7 @@ class App(tk.Tk):
 
         # data rows
         self.rows = []
+
 
 
     # --- Log ---
@@ -1421,24 +1484,33 @@ class App(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _start_coverage_check(self):
+        from tkinter import messagebox
         rows = self._selected_rows()
         if not rows:
             messagebox.showinfo("Nothing selected", "Select one or more rows first.")
             return
-        # Filter rows that have both rec_start and rec_end
+
         valid = [r for r in rows if r.rec_start and r.rec_end]
         skipped = [r for r in rows if not (r.rec_start and r.rec_end)]
         if skipped:
-            self.log(f"[coverage] Skipping {len(skipped)} item(s) with missing metadata.")
-        threshold_hours = 23.0
-        try:
-            if hasattr(self, "_config"):
-                threshold_hours = float(self._config.get("checker", "threshold_hours", fallback="23"))
-        except Exception:
-            pass
+            self.log(f"[coverage] Skipping {len(skipped)} item(s) with missing start/end metadata.")
 
-        report = self._compute_coverage_report(valid, threshold_hours)
-        self._show_coverage_report(report)
+        # Threshold from INI
+        try:
+            threshold_hours = float(self._config.get("checker", "threshold_hours", fallback="23"))
+        except Exception:
+            threshold_hours = 23.0
+
+        if not valid:
+            messagebox.showinfo("No valid sessions", "No selected rows have both RecStart and RecEnd.")
+            return
+
+        bars_by_day = self._clip_selected_sessions_per_day(valid)  # dict[date] -> list of bars
+        per_day = self._compute_union_and_flags(bars_by_day, threshold_hours)  # union, flags
+
+        report = self._make_coverage_report(bars_by_day, per_day, threshold_hours)
+        self._show_coverage_window(bars_by_day, per_day, report, threshold_hours)
+
 
     def _compute_coverage_report(self, rows, threshold_hours: float):
         """
@@ -1623,6 +1695,48 @@ class App(tk.Tk):
             messagebox.showerror("Export error", f"Failed to write main script:\n{e}")
             return
 
+    def _show_coverage_window(self, bars_by_day, per_day, report_text, threshold_hours: float):
+        import tkinter as tk
+        from tkinter import ttk
+        from tkinter import messagebox
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+        # Build window
+        win = tk.Toplevel(self)
+        win.title("Coverage & Gantt (Selected)")
+        win.geometry("1100x800")
+
+        # Top: controls
+        topf = ttk.Frame(win)
+        topf.pack(fill="x", padx=8, pady=6)
+        ttk.Button(topf, text="Re-check", command=lambda: self._coverage_recheck_window(win)).pack(side="left", padx=4)
+        ttk.Button(topf, text="Save… (PNG + TSV)", command=lambda: self._save_gantt_and_tsv(win)).pack(side="left", padx=4)
+
+        # Middle: report text
+        repf = ttk.LabelFrame(win, text="Coverage report")
+        repf.pack(fill="both", expand=True, padx=8, pady=6)
+        txt = tk.Text(repf, wrap="word")
+        txt.pack(fill="both", expand=True)
+        txt.insert("1.0", report_text)
+        txt.configure(state="disabled")
+
+        # Bottom: Gantt
+        ganttf = ttk.LabelFrame(win, text="Gantt (grouped by date)")
+        ganttf.pack(fill="both", expand=True, padx=8, pady=(0,8))
+
+        fig = self._build_gantt_figure(bars_by_day, per_day)
+        canvas = FigureCanvasTkAgg(fig, master=ganttf)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        # Stash data on window for re-check/save hooks
+        win._coverage_text = txt
+        win._coverage_fig = fig
+        win._coverage_canvas = canvas
+        win._coverage_bars_by_day = bars_by_day
+        win._coverage_per_day = per_day
+        win._coverage_threshold = threshold_hours
+
     def _generate_copy_script_main_two_part(self, dest_base, move_mode, csv_path, missing_items):
         """
         Returns the text of the standalone main script that reads a CSV list of items to process.
@@ -1725,6 +1839,199 @@ class App(tk.Tk):
         lines.append("")
         return '\n'.join(lines)
 
+    def _clip_selected_sessions_per_day(self, rows):
+        """
+        Returns dict[date] -> list of bars, where each bar is:
+          {
+            'folder': str,
+            'start_dt': datetime (clipped within date),
+            'end_dt': datetime (clipped within date),
+            'eegno': str or '',
+            'study_name': str or ''
+          }
+        Sessions that span midnight produce 2 bars (one per day).
+        """
+        from datetime import datetime, timedelta
+        from collections import defaultdict
+
+        out = defaultdict(list)
+        for r in rows:
+            try:
+                t0 = datetime.strptime(r.rec_start, "%Y-%m-%d %H:%M:%S")
+                t1 = datetime.strptime(r.rec_end, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+            if t1 < t0:
+                t0, t1 = t1, t0
+
+            day = t0.date()
+            while day <= t1.date():
+                day_start = datetime.combine(day, datetime.min.time())
+                day_end = day_start + timedelta(days=1)
+                a = max(t0, day_start)
+                b = min(t1, day_end)
+                if b > a:
+                    out[day].append({
+                        "folder": r.folder_name,
+                        "start_dt": a,
+                        "end_dt": b,
+                        "eegno": r.eegno or "",
+                        "study_name": r.study_name or ""
+                    })
+                day = day + timedelta(days=1)
+
+        # sort by start time
+        for d in list(out.keys()):
+            out[d].sort(key=lambda x: x["start_dt"])
+        return dict(out)
+
+    def _compute_union_and_flags(self, bars_by_day, threshold_hours: float):
+        """
+        For each day:
+          - compute union intervals and total covered seconds,
+          - detect multiple sessions (>=2 bars),
+          - detect overlapping sessions and build overlaps map,
+          - mark below-threshold (except first/last day).
+        Returns dict[date] -> {
+            'union': [(start_dt, end_dt), ...],           # merged intervals for faint overlay
+            'total_secs': int,
+            'multiple': bool,
+            'overlap': bool,
+            'overlaps_map': {idx: [folder_names...]},     # per-bar overlaps (by index in bars list)
+            'below_threshold': bool
+        }
+        """
+        from datetime import timedelta
+        days = sorted(bars_by_day.keys())
+        first_day = days[0] if days else None
+        last_day = days[-1] if days else None
+
+        per_day = {}
+        for d in days:
+            bars = bars_by_day.get(d, [])
+            # Union merge
+            intervals = [(b["start_dt"], b["end_dt"]) for b in bars]
+            intervals.sort(key=lambda t: t[0])
+            merged = []
+            for s, e in intervals:
+                if not merged:
+                    merged.append([s,e])
+                else:
+                    ps, pe = merged[-1]
+                    if s <= pe:
+                        if e > pe: merged[-1][1] = e
+                    else:
+                        merged.append([s,e])
+            merged = [(s,e) for s,e in merged]
+            total_secs = sum(int((e - s).total_seconds()) for s, e in merged)
+
+            # Multiple & overlap detection
+            multiple = len(bars) >= 2
+            overlaps_map = {i: [] for i in range(len(bars))}
+            overlap_flag = False
+            for i in range(len(bars)):
+                for j in range(i+1, len(bars)):
+                    a1, a2 = bars[i]["start_dt"], bars[i]["end_dt"]
+                    b1, b2 = bars[j]["start_dt"], bars[j]["end_dt"]
+                    if b1 < a2 and a1 < b2:
+                        # overlap
+                        overlaps_map[i].append(bars[j]["folder"])
+                        overlaps_map[j].append(bars[i]["folder"])
+                        overlap_flag = True
+
+            # Below-threshold (skip first/last day tagging)
+            below = (total_secs < int(threshold_hours * 3600))
+            if d == first_day or d == last_day:
+                below = False
+
+            per_day[d] = {
+                "union": merged,
+                "total_secs": total_secs,
+                "multiple": multiple,
+                "overlap": overlap_flag,
+                "overlaps_map": overlaps_map,
+                "below_threshold": below
+            }
+        return per_day
+
+    def _make_coverage_report(self, bars_by_day, per_day, threshold_hours: float):
+        """
+        Build the human-readable report with:
+          - per-day totals and flags,
+          - "Details for days with multiple sessions" (inline, clipped times),
+          - "Days with overlapping sessions",
+          - "Below-threshold days" (excluding first/last day).
+        """
+        from datetime import datetime
+        lines = []
+        if not bars_by_day:
+            return "No valid sessions to evaluate."
+
+        days = sorted(bars_by_day.keys())
+        start_day = days[0]
+        end_day = days[-1]
+
+        lines.append(f"Coverage window: {start_day.isoformat()}  →  {end_day.isoformat()}")
+        lines.append(f"Threshold: {threshold_hours:.2f} h/day (first/last day excluded from 'below threshold' tagging)")
+        lines.append("")
+        lines.append("Per-day totals (union coverage):")
+
+        below_days = []
+        multi_days = []
+        overlap_days = []
+
+        for d in days:
+            secs = per_day[d]["total_secs"]
+            hours = secs / 3600.0
+            flags = []
+            if per_day[d]["multiple"]:
+                flags.append("MULTIPLE")
+                multi_days.append(d)
+            if per_day[d]["overlap"]:
+                flags.append("OVERLAPPING")
+                overlap_days.append(d)
+            if per_day[d]["below_threshold"]:
+                flags.append("< threshold")
+                below_days.append(d)
+            flag_txt = ("  [" + ", ".join(flags) + "]") if flags else ""
+            lines.append(f"  {d.isoformat()}  {hours:6.2f} h{flag_txt}")
+
+        # Inline details for days with multiple sessions
+        if multi_days:
+            lines.append("")
+            lines.append("Details for days with multiple sessions:")
+            for d in sorted(set(multi_days)):
+                lines.append(f"  {d.isoformat()}:")
+                bars = bars_by_day[d]
+                overlaps_map = per_day[d]["overlaps_map"]
+                for idx, b in enumerate(bars):
+                    s = b["start_dt"].strftime("%H:%M:%S")
+                    e = b["end_dt"].strftime("%H:%M:%S")
+                    mark = " [OVERLAP]" if overlaps_map.get(idx) else ""
+                    lines.append(f"    • {b['folder']} | {s} → {e} | EegNo={b['eegno']} | StudyName={b['study_name']}{mark}")
+
+        # Overlapping sessions section
+        if overlap_days:
+            lines.append("")
+            lines.append("Days with overlapping sessions:")
+            for d in sorted(set(overlap_days)):
+                lines.append(f"  {d.isoformat()}:")
+                bars = bars_by_day[d]
+                overlaps_map = per_day[d]["overlaps_map"]
+                for idx, targets in overlaps_map.items():
+                    if targets:
+                        s = bars[idx]["start_dt"].strftime("%H:%M:%S")
+                        e = bars[idx]["end_dt"].strftime("%H:%M:%S")
+                        lines.append(f"    • {bars[idx]['folder']}  ({s} → {e})  overlaps with: {', '.join(sorted(set(targets)))}")
+
+        # Below-threshold days (excluding first/last)
+        lines.append("")
+        if below_days:
+            lines.append(f"Below-threshold days ({len(below_days)}): " + ", ".join(d.isoformat() for d in sorted(below_days)))
+        else:
+            lines.append("Below-threshold days: none")
+
+        return "\n".join(lines)
 
     def _generate_copy_script(self, dest_base, present_items, missing_items, move_mode):
         """
@@ -1822,6 +2129,243 @@ class App(tk.Tk):
         lines.append("        print('Interrupted.')")
         lines.append("")
         return "\n".join(lines)
+
+    def _build_gantt_figure(self, bars_by_day, per_day):
+        import matplotlib
+        matplotlib.use("Agg")  # ensure non-interactive backend for embedding; TkAgg via canvas handles drawing
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from datetime import datetime
+
+        # INI settings
+        show_grid = True
+        tick_hours = 4
+        dpi = 150
+        fig_w = 1200
+        fig_h = 700
+        try:
+            show_grid = self._config.getboolean("gantt", "gantt_show_grid", fallback=True)
+            tick_hours = int(self._config.get("gantt", "gantt_tick_hours", fallback="1"))
+            dpi = int(self._config.get("gantt", "gantt_dpi", fallback="150"))
+            fig_w = int(self._config.get("gantt", "gantt_width", fallback="1200"))
+            fig_h = int(self._config.get("gantt", "gantt_height", fallback="700"))
+        except Exception:
+            pass
+
+        # Convert pixels to inches for Matplotlib
+        fig = plt.Figure(figsize=(max(4, fig_w/96), max(3, fig_h/96)), dpi=dpi)
+        ax = fig.add_subplot(111)
+
+        # Prepare y-axis days
+        days = sorted(bars_by_day.keys())
+        if not days:
+            ax.text(0.5, 0.5, "No data", ha="center", va="center")
+            return fig
+
+        # X limits from global min/max
+        all_starts = []
+        all_ends = []
+        for d in days:
+            for b in bars_by_day[d]:
+                all_starts.append(b["start_dt"])
+                all_ends.append(b["end_dt"])
+            for s,e in per_day[d]["union"]:
+                all_starts.append(s)
+                all_ends.append(e)
+        xmin = min(all_starts)
+        xmax = max(all_ends)
+
+        # Map day -> y position
+        y_positions = {d: i for i, d in enumerate(days)}
+        y_labels = [d.isoformat() for d in days]
+
+        # Draw faint union overlay (background)
+        union_patches = []
+        for d in days:
+            y = y_positions[d]
+            for s, e in per_day[d]["union"]:
+                ax.barh(y=y, width=(mdates.date2num(e) - mdates.date2num(s)),
+                        left=mdates.date2num(s), height=0.6, alpha=0.15, align='center')
+
+        # Draw session bars and keep metadata for click
+        bar_rects = []
+        bar_meta = []  # dict per bar for tooltip
+        for d in days:
+            y = y_positions[d]
+            bars = bars_by_day[d]
+            for b in bars:
+                left = mdates.date2num(b["start_dt"])
+                width = mdates.date2num(b["end_dt"]) - left
+                rects = ax.barh(y=y, width=width, left=left, height=0.35, align='center', picker=5)
+                rect = rects[0]
+                bar_rects.append(rect)
+                bar_meta.append({
+                    "date": d,
+                    "folder": b["folder"],
+                    "start": b["start_dt"],
+                    "end": b["end_dt"],
+                    "eegno": b["eegno"],
+                    "study_name": b["study_name"]
+                })
+
+        # Axis formatting
+        ax.set_yticks(list(y_positions.values()))
+        ax.set_yticklabels(y_labels)
+        ax.set_ylim(-1, len(days))
+        ax.set_xlim(mdates.date2num(xmin), mdates.date2num(xmax))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, tick_hours)))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d %H:%M'))
+        if show_grid:
+            ax.grid(True, axis="x", linestyle="--", alpha=0.3)
+        fig.autofmt_xdate()
+
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Date")
+
+        # Click-to-show tooltip (annotation)
+        annot = ax.annotate("", xy=(0,0), xytext=(20,20),
+                            textcoords="offset points", bbox=dict(boxstyle="round", fc="w", ec="0.5", alpha=0.9),
+                            arrowprops=dict(arrowstyle="->"))
+        annot.set_visible(False)
+
+        def _format_meta(i):
+            m = bar_meta[i]
+            s = m["start"].strftime("%Y-%m-%d %H:%M:%S")
+            e = m["end"].strftime("%Y-%m-%d %H:%M:%S")
+            return (f"{m['folder']}\n"
+                    f"{s} → {e}\n"
+                    f"EegNo={m['eegno']}  StudyName={m['study_name']}")
+
+        def on_pick(event):
+            # Find which rect
+            if event.artist in bar_rects:
+                i = bar_rects.index(event.artist)
+                rect = bar_rects[i]
+                x = rect.get_x() + rect.get_width()/2
+                y = rect.get_y() + rect.get_height()/2
+                annot.xy = (x, y)
+                annot.set_text(_format_meta(i))
+                annot.set_visible(True)
+                fig.canvas.draw_idle()
+
+        def on_click(event):
+            # Hide annotation if click on empty space
+            if not event.inaxes:
+                return
+            if event.button == 1 and (event.xdata is not None and event.ydata is not None):
+                # keep as-is; pick event shows info, otherwise hide
+                pass
+
+        fig.canvas.mpl_connect("pick_event", on_pick)
+        fig.canvas.mpl_connect("button_press_event", on_click)
+        return fig
+
+    def _coverage_recheck_window(self, win):
+        # Recompute from current selection and refresh both widgets
+        rows = self._selected_rows()
+        valid = [r for r in rows if r.rec_start and r.rec_end]
+        if not valid:
+            from tkinter import messagebox
+            messagebox.showinfo("No valid sessions", "No selected rows have both RecStart and RecEnd.")
+            return
+
+        try:
+            threshold_hours = float(self._config.get("checker", "threshold_hours", fallback="23"))
+        except Exception:
+            threshold_hours = 23.0
+
+        bars_by_day = self._clip_selected_sessions_per_day(valid)
+        per_day = self._compute_union_and_flags(bars_by_day, threshold_hours)
+        report = self._make_coverage_report(bars_by_day, per_day, threshold_hours)
+
+        # Update text
+        txt = win._coverage_text
+        txt.configure(state="normal")
+        txt.delete("1.0", "end")
+        txt.insert("1.0", report)
+        txt.configure(state="disabled")
+
+        # Update chart
+        fig = self._build_gantt_figure(bars_by_day, per_day)
+        canvas = win._coverage_canvas
+        win._coverage_fig = fig
+        canvas.figure = fig
+        canvas.draw()
+
+        # Stash updated data
+        win._coverage_bars_by_day = bars_by_day
+        win._coverage_per_day = per_day
+        win._coverage_threshold = threshold_hours
+        self.log("Coverage re-checked.")
+
+
+    def _save_gantt_and_tsv(self, win):
+        import os, csv
+        from tkinter import filedialog, messagebox
+
+        fig = win._coverage_fig
+        bars_by_day = win._coverage_bars_by_day
+        per_day = win._coverage_per_day
+
+        # Prompt for base name (PNG); we will also save TSV next to it
+        f = filedialog.asksaveasfilename(
+            title="Save Gantt (choose base name)",
+            defaultextension=".png",
+            filetypes=[("PNG Image", "*.png"), ("All files", "*.*")]
+        )
+        if not f:
+            return
+        base_no_ext, _ = os.path.splitext(f)
+        png_path = base_no_ext + ".png"
+        tsv_path = base_no_ext + ".tsv"
+
+        # PNG
+        try:
+            dpi = int(self._config.get("gantt", "gantt_dpi", fallback="150"))
+        except Exception:
+            dpi = 150
+        try:
+            fig.savefig(png_path, dpi=dpi, bbox_inches="tight")
+            self.log(f"Saved Gantt PNG: {png_path}")
+        except Exception as e:
+            messagebox.showerror("Save error", f"Failed to save PNG:\n{e}")
+            return
+
+        # TSV: one row per clipped bar
+        try:
+            with open(tsv_path, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh, delimiter='\t')
+                w.writerow(["date", "start_time", "end_time", "duration_hours",
+                            "folder", "eegno", "study_name",
+                            "overlaps_with", "is_multiple_day", "is_overlapping", "is_below_threshold_day"])
+                for d in sorted(bars_by_day.keys()):
+                    bars = bars_by_day[d]
+                    overlaps_map = per_day[d]["overlaps_map"]
+                    is_multiple = "true" if per_day[d]["multiple"] else "false"
+                    is_below = "true" if per_day[d]["below_threshold"] else "false"
+                    for idx, b in enumerate(bars):
+                        s = b["start_dt"]
+                        e = b["end_dt"]
+                        dur_h = (e - s).total_seconds() / 3600.0
+                        overlaps_with = ";".join(sorted(set(overlaps_map.get(idx, []))))
+                        is_overlap = "true" if overlaps_with else "false"
+                        w.writerow([
+                            d.isoformat(),
+                            s.strftime("%H:%M:%S"),
+                            e.strftime("%H:%M:%S"),
+                            f"{dur_h:.3f}",
+                            b["folder"],
+                            b["eegno"],
+                            b["study_name"],
+                            overlaps_with,
+                            is_multiple,
+                            is_overlap,
+                            is_below
+                        ])
+            self.log(f"Saved Gantt TSV: {tsv_path}")
+        except Exception as e:
+            messagebox.showerror("Save error", f"Failed to save TSV:\n{e}")
+            return
 
 # ---- main ----
 
