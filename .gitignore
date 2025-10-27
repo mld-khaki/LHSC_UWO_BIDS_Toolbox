@@ -9,4 +9,7 @@ data2bids/main.py.bak01
 data2bids/main.py.bak01
 *.pyc
 *.log
-*.cpython-312.pyc
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
