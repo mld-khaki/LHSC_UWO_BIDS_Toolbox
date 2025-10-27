@@ -1724,6 +1724,17 @@ class App(tk.Tk):
         ttk.Button(topf, text="Gantt ↑", command=lambda: self._nudge_gantt_height(win, -80)).pack(side="left", padx=2)
         ttk.Button(topf, text="Gantt ↓", command=lambda: self._nudge_gantt_height(win, +80)).pack(side="left", padx=2)
 
+        ttk.Label(topf, text=" | ").pack(side="left", padx=2)
+        # Midnight lines toggle (default: on)
+        try:
+            default_midnight = self._config.getboolean("gantt", "gantt_show_midnight_lines", fallback=True)
+        except Exception:
+            default_midnight = True
+        win._show_midnight_lines = bool(default_midnight)
+        win._midnight_btn_txt = tk.StringVar(value=f"Day lines: {'On' if win._show_midnight_lines else 'Off'}")
+        ttk.Button(topf, textvariable=win._midnight_btn_txt,
+                   command=lambda: self._toggle_midnight_lines(win)).pack(side="left", padx=2)
+
         # --- Paned window (draggable sash between report and chart)
         paned = ttk.Panedwindow(win, orient="vertical")
         paned.pack(fill="both", expand=True, padx=8, pady=(0,8))
@@ -1746,7 +1757,11 @@ class App(tk.Tk):
             tick_hours = 1
         win._gantt_tick_hours = max(1, tick_hours)
 
-        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=win._gantt_tick_hours)
+        fig = self._build_gantt_figure(
+            bars_by_day, per_day,
+            tick_hours=win._gantt_tick_hours,
+            show_midnight_lines=win._show_midnight_lines
+        )
         canvas = FigureCanvasTkAgg(fig, master=ganttf)
         canvas.draw()
         canvas_widget = canvas.get_tk_widget()
@@ -1764,6 +1779,7 @@ class App(tk.Tk):
         win._coverage_bars_by_day = bars_by_day
         win._coverage_per_day = per_day
         win._coverage_threshold = threshold_hours
+
 
 
     def _generate_copy_script_main_two_part(self, dest_base, move_mode, csv_path, missing_items):
@@ -2159,21 +2175,22 @@ class App(tk.Tk):
         lines.append("")
         return "\n".join(lines)
 
-    def _build_gantt_figure(self, bars_by_day, per_day, tick_hours=None):
+    def _build_gantt_figure(self, bars_by_day, per_day, tick_hours=None, show_midnight_lines=True):
         """
         Build the Gantt figure with:
           - Unique, deterministic color PER FOLDER (session) across the whole chart
-            so each different session gets a distinct color, and split/multi-day
-            segments of the same session stay the same color.
           - Faint per-day union overlay
-          - Click to show info; click on empty space to close info
-          - Optional mpld3 tooltips support via invisible scatter
+          - Optional vertical red dotted lines at day changes (00:00), toggleable
+          - Click to show info; click on empty space to close info (Tk)
+          - Stores bar rectangles + labels for mpld3.BarTooltip in HTML
+          - Also stores a nearly invisible scatter for mpld3.PointHTMLTooltip fallback
         """
         import matplotlib
         matplotlib.use("Agg")  # embed in Tk; TkAgg canvas wraps drawing
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
         import colorsys
+        from datetime import datetime, timedelta
 
         # ---- Settings
         show_grid = True
@@ -2218,38 +2235,27 @@ class App(tk.Tk):
         y_labels = [d.isoformat() for d in days]
 
         # ---- UNIQUE color per folder (session), consistent across all days
-        # Gather all unique folder names present in the visible data
-        unique_folders = []
-        seen = set()
+        unique_folders, seen = [], set()
         for d in days:
             for b in bars_by_day[d]:
                 f = b["folder"]
                 if f not in seen:
-                    seen.add(f)
-                    unique_folders.append(f)
+                    seen.add(f); unique_folders.append(f)
 
-        # Try to use Matplotlib base cycle first, then generate more colors if needed
         base_cycle = []
         try:
             base_cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
         except Exception:
             base_cycle = []
-        # Ensure we have at least N distinct colors
         N = len(unique_folders)
         colors_list = list(base_cycle[:N]) if len(base_cycle) >= N else list(base_cycle)
         if len(colors_list) < N:
-            # Generate additional distinct colors in HSV and append
             needed = N - len(colors_list)
-            # Evenly spaced hues with medium saturation/value
-            gen = []
             for i in range(needed):
-                h = i / max(1, needed)   # 0..1
-                s = 0.65
-                v = 0.9
-                r, g, b = colorsys.hsv_to_rgb(h, s, v)
-                gen.append((r, g, b))
-            colors_list.extend(gen)
-
+                h = i / max(1, needed)
+                s = 0.65; v = 0.9
+                r,g,b = colorsys.hsv_to_rgb(h, s, v)
+                colors_list.append((r,g,b))
         folder_color = {folder: colors_list[i] for i, folder in enumerate(unique_folders)}
 
         # ---- Faint union overlay (background)
@@ -2265,14 +2271,16 @@ class App(tk.Tk):
 
         # ---- Draw session bars with the per-folder color map
         bar_rects = []
-        bar_meta = []
-        point_x, point_y, point_labels = [], [], []
+        bar_labels_html = []   # for mpld3.BarTooltip
+        bar_meta = []          # for Tk annotation
+        point_x, point_y, point_labels = [], [], []  # mpld3.PointHTMLTooltip fallback
+
         for d in days:
             y = y_positions[d]
             for b in bars_by_day[d]:
                 left = mdates.date2num(b["start_dt"])
                 width = mdates.date2num(b["end_dt"]) - left
-                c = folder_color.get(b["folder"], None)
+                c = folder_color.get(b["folder"])
                 rects = ax.barh(
                     y=y, width=width, left=left, height=0.35, align='center',
                     picker=5, color=c
@@ -2288,15 +2296,16 @@ class App(tk.Tk):
                     "study_name": b["study_name"]
                 }
                 bar_meta.append(meta)
-                # midpoint used for HTML tooltips (mpld3)
-                point_x.append(left + width/2.0)
-                point_y.append(y)
+                # labels
                 s_txt = meta["start"].strftime("%Y-%m-%d %H:%M:%S")
                 e_txt = meta["end"].strftime("%Y-%m-%d %H:%M:%S")
-                point_labels.append(
-                    f"<b>{meta['folder']}</b><br/>{s_txt} → {e_txt}<br/>"
-                    f"EegNo={meta['eegno']} &nbsp;&nbsp; StudyName={meta['study_name']}"
-                )
+                html = (f"<b>{meta['folder']}</b><br/>{s_txt} → {e_txt}<br/>"
+                        f"EegNo={meta['eegno']} &nbsp;&nbsp; StudyName={meta['study_name']}")
+                bar_labels_html.append(html)
+                # midpoint used for fallback tooltips
+                point_x.append(left + width/2.0)
+                point_y.append(y)
+                point_labels.append(html)
 
         # ---- Axes formatting
         ax.set_yticks(list(y_positions.values()))
@@ -2310,6 +2319,16 @@ class App(tk.Tk):
         fig.autofmt_xdate()
         ax.set_xlabel("Time")
         ax.set_ylabel("Date")
+
+        # ---- Optional vertical red dotted lines at midnight (00:00)
+        if show_midnight_lines:
+            cur = datetime.combine(xmin.date(), datetime.min.time())
+            if cur > xmin:
+                cur -= timedelta(days=1)
+            end = datetime.combine(xmax.date(), datetime.min.time()) + timedelta(days=1)
+            while cur <= end:
+                ax.axvline(mdates.date2num(cur), linestyle=":", linewidth=1.3, color="red", alpha=0.6)
+                cur += timedelta(days=1)
 
         # ---- Click-to-show info (Tk) and click blank to close
         annot = ax.annotate(
@@ -2353,15 +2372,20 @@ class App(tk.Tk):
         fig.canvas.mpl_connect("pick_event", on_pick)
         fig.canvas.mpl_connect("button_press_event", on_click)
 
-        # ---- Invisible scatter for HTML tooltips (mpld3)
+        # ---- Store artists/labels for HTML export
         try:
-            sc = ax.scatter(point_x, point_y, alpha=0.0)  # invisible anchors
+            # Invisible-but-hoverable anchor points (alpha>0 to keep pointer-events)
+            sc = ax.scatter(point_x, point_y, alpha=0.01, s=30)  # tiny, essentially invisible
             fig._tooltip_scatter = sc
             fig._tooltip_labels = point_labels
+            fig._bar_rects = bar_rects
+            fig._bar_html_labels = bar_labels_html
         except Exception:
             pass
 
         return fig
+
+
 
 
 
@@ -2390,9 +2414,14 @@ class App(tk.Tk):
         txt.insert("1.0", report)
         txt.configure(state="disabled")
 
-        # Rebuild chart, preserving current tick hours
+        # Rebuild chart, preserving current tick hours + midnight lines flag
         tick_hours = getattr(win, "_gantt_tick_hours", 1)
-        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=max(1, int(tick_hours)))
+        show_midnight = getattr(win, "_show_midnight_lines", True)
+        fig = self._build_gantt_figure(
+            bars_by_day, per_day,
+            tick_hours=max(1, int(tick_hours)),
+            show_midnight_lines=bool(show_midnight)
+        )
         canvas = win._coverage_canvas
         win._coverage_fig = fig
         canvas.figure = fig
@@ -2403,6 +2432,7 @@ class App(tk.Tk):
         win._coverage_per_day = per_day
         win._coverage_threshold = threshold_hours
         self.log("Coverage re-checked.")
+
 
 
 
@@ -2477,6 +2507,8 @@ class App(tk.Tk):
     def _save_gantt_interactive(self, win):
         import os
         from tkinter import filedialog, messagebox
+
+        # Check mpld3 availability
         try:
             import mpld3
             from mpld3 import plugins
@@ -2487,6 +2519,10 @@ class App(tk.Tk):
             )
             return
 
+        # Apply Matplotlib↔mpld3 compatibility shim
+        self._ensure_mpld3_matplotlib_compat()
+
+        # Choose output file
         f = filedialog.asksaveasfilename(
             title="Save Interactive Gantt (HTML)",
             defaultextension=".html",
@@ -2497,14 +2533,22 @@ class App(tk.Tk):
 
         fig = win._coverage_fig
 
-        # Attach tooltips to the invisible scatter we created in _build_gantt_figure
+        # Attach tooltips to bars (preferred), fallback to scatter if bars not available
         try:
-            sc = getattr(fig, "_tooltip_scatter", None)
-            labels = getattr(fig, "_tooltip_labels", None)
-            if sc is not None and labels:
-                tooltip = plugins.PointHTMLTooltip(sc, labels=labels, voffset=10, hoffset=10, css=None)
-                plugins.connect(fig, tooltip)
-            # Basic zoom/pan are included by mpld3 by default
+            bar_rects = getattr(fig, "_bar_rects", None)
+            bar_labels = getattr(fig, "_bar_html_labels", None)
+            if bar_rects and bar_labels and len(bar_rects) == len(bar_labels):
+                plugins.connect(fig, plugins.BarTooltip(bar_rects, labels=bar_labels, hoffset=10, voffset=10))
+            else:
+                sc = getattr(fig, "_tooltip_scatter", None)
+                labels = getattr(fig, "_tooltip_labels", None)
+                if sc is not None and labels:
+                    plugins.connect(fig, plugins.PointHTMLTooltip(sc, labels=labels, hoffset=10, voffset=10))
+            # Pan/Zoom/Reset
+            try:
+                plugins.connect(fig, plugins.Reset(), plugins.Zoom(), plugins.Pan())
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2514,16 +2558,36 @@ class App(tk.Tk):
         except Exception:
             report_text = ""
 
+        # Render HTML (retry once if needed)
         try:
             html_fig = mpld3.fig_to_html(fig)
-            html = f"""<!DOCTYPE html>
+        except Exception:
+            try:
+                self._ensure_mpld3_matplotlib_compat()
+                html_fig = mpld3.fig_to_html(fig)
+            except Exception as e2:
+                try:
+                    import matplotlib, mpld3 as _mpld3_mod
+                    ver_mt = getattr(matplotlib, "__version__", "?")
+                    ver_d3 = getattr(_mpld3_mod, "__version__", "?")
+                except Exception:
+                    ver_mt = ver_d3 = "?"
+                messagebox.showerror(
+                    "Save error",
+                    "Failed to save interactive HTML.\n\n"
+                    f"Matplotlib={ver_mt}, mpld3={ver_d3}\n\n"
+                    f"Last error:\n{e2}"
+                )
+                return
+
+        html = f"""<!DOCTYPE html>
     <html>
     <head>
     <meta charset="utf-8">
     <title>Interactive Gantt</title>
     <style>
     body {{ font-family: sans-serif; }}
-    pre {{ background:#f7f7f7; padding:10px; border:1px solid #ddd; }}
+    pre {{ background:#f7f7f7; padding:10px; border:1px solid #ddd; white-space:pre-wrap; }}
     </style>
     </head>
     <body>
@@ -2534,11 +2598,14 @@ class App(tk.Tk):
     </body>
     </html>
     """
+        try:
             with open(f, "w", encoding="utf-8") as fh:
                 fh.write(html)
             self.log(f"Saved interactive Gantt HTML: {f}")
         except Exception as e:
             messagebox.showerror("Save error", f"Failed to save HTML:\n{e}")
+
+
 
     def _change_tick_hours(self, win, delta):
         # Update tick size and rebuild the chart
@@ -2550,10 +2617,16 @@ class App(tk.Tk):
 
         bars_by_day = win._coverage_bars_by_day
         per_day = win._coverage_per_day
-        fig = self._build_gantt_figure(bars_by_day, per_day, tick_hours=win._gantt_tick_hours)
+        show_midnight = getattr(win, "_show_midnight_lines", True)
+        fig = self._build_gantt_figure(
+            bars_by_day, per_day,
+            tick_hours=win._gantt_tick_hours,
+            show_midnight_lines=bool(show_midnight)
+        )
         win._coverage_fig = fig
         win._coverage_canvas.figure = fig
         win._coverage_canvas.draw()
+
 
     def _nudge_gantt_height(self, win, delta_pixels):
         # Move the sash between report and chart by a few pixels
@@ -2563,6 +2636,46 @@ class App(tk.Tk):
             new_pos = max(80, cur + int(delta_pixels))
             paned.sashpos(0, new_pos)
         except Exception:
+            pass
+            
+    def _toggle_midnight_lines(self, win):
+        # Flip the flag
+        cur = getattr(win, "_show_midnight_lines", True)
+        win._show_midnight_lines = not bool(cur)
+        # Update button label
+        if hasattr(win, "_midnight_btn_txt"):
+            win._midnight_btn_txt.set(f"Day lines: {'On' if win._show_midnight_lines else 'Off'}")
+        # Rebuild chart with the new setting
+        bars_by_day = win._coverage_bars_by_day
+        per_day = win._coverage_per_day
+        tick_hours = getattr(win, "_gantt_tick_hours", 1)
+        fig = self._build_gantt_figure(
+            bars_by_day, per_day,
+            tick_hours=max(1, int(tick_hours)),
+            show_midnight_lines=win._show_midnight_lines
+        )
+        win._coverage_fig = fig
+        win._coverage_canvas.figure = fig
+        win._coverage_canvas.draw()
+            
+
+    def _ensure_mpld3_matplotlib_compat(self):
+        """
+        Ensures mpld3 works with newer Matplotlib where Axis.get_converter
+        no longer exists. We monkey-patch a minimal shim that returns the
+        Axis.converter attribute when mpld3 calls get_converter().
+        Safe to call multiple times.
+        """
+        try:
+            import matplotlib.axis as maxis
+            if not hasattr(maxis.Axis, "get_converter"):
+                def _get_converter(self):
+                    # Matplotlib >= 3.8 keeps converter on the Axis
+                    return getattr(self, "converter", None)
+                maxis.Axis.get_converter = _get_converter  # monkey-patch
+        except Exception:
+            # If anything unexpected happens, silently continue; mpld3 will still try
+            # and our caller will surface any remaining errors.
             pass
 
 # ---- main ----
