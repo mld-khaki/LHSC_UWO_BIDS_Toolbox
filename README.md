@@ -1,200 +1,172 @@
 <p align="center">
-  <img src=https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/splash.png "Milad Khaki BIDS Tools"/>
+  <img src="https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/splash.png" alt="LHSC / UWO BIDS Toolbox splash" />
 </p>
 
+# LHSC / UWO Natus → EDF → BIDS Toolbox
 
-# EEG Data Tools Suite – Comprehensive Repository Summary
+A modular suite of Python tools for **Natus EEG workflows**, **EDF handling**, **BIDS organization**, **redaction/anonymization**, **quality control**, and **archiving**. The repository is organized as a step-based pipeline (**Step A → B → C**) with additional “Step X” utilities for verification, provenance, and KPI reporting.
 
-This GitHub repository provides a suite of Python tools for processing, analyzing, redacting, and managing EEG data files, primarily focused on EDF and Natus EEG formats. The tools are designed for researchers and clinicians working with large EEG datasets. A centralized GUI script (`_MK_EDF_handler.py`) facilitates launching each tool with the appropriate arguments.
-
----
-
-## 🧰 Tool Summary
-
-### 1. `_MK_EDF_handler.py`
-- A **graphical user interface (GUI)** launcher built with `PySimpleGUI`.
-- Supports selecting and running any of the included tools by dynamically presenting required inputs.
-- Displays script output within the interface and handles execution errors.
+> **Tip:** Most tools are standalone scripts (CLI and/or GUI). You can run them directly, or use the toolbox launcher in `src/toolbox_manager.py` if configured for your environment.
 
 ---
 
-### 2. `EDF_dir_scanner.py`
-- Recursively scans directories for `.edf` files and **extracts rich metadata**.
-- Outputs metadata in `.xlsx`, `.csv`, `.json`, or `.txt` format.
-- **Metadata includes** subject info, recording equipment, timestamps, and signal properties.
-- Efficiently handles **large datasets**.
-- Requires `pandas`, `openpyxl`, and `EDF_reader_mld`.
+## What’s inside
 
-**Usage Example**:
-```
-python EDF_dir_scanner.py /path/to/edf/files --output metadata.xlsx
-```
+### Main pipeline (step-based)
 
----
+- **Step A — Natus landing & ingestion**
+  - Session discovery / selection (GUI)
+  - Compatibility checks and export helpers
+  - Post-export cleanup and utilities
 
-### 3. `FolderAnalysis.py`
-- Counts the number of subdirectories in a given folder **excluding the `code/` folder**.
-- Simple and lightweight; no external dependencies.
-- Outputs structured folder count.
+- **Step B — EDF transformation**
+  - EDF clipping and time tools (GUI + helpers)
+  - Label copy / redaction assistants
+  - Legacy verification / evaluation tools
 
-**Usage Example**:
-```
-python FolderAnalysis.py
-```
+- **Step C — BIDS management**
+  - BIDS consolidation and session shifting
+  - BIDS verification & coverage mapping
+  - Cleanup and validation toolbox
+  - TSV / JSON redaction utilities (regex + ML options)
+  - SEEG2BIDS and `data2bids` integration
 
----
-
-### 4. `Natus_InfoExtractor.py` & `Natus_InfoServerScraper.py`
-- Extracts **deep nested metadata** from Natus `.eeg` files using pattern matching.
-- Handles **Excel-style timestamps**, nested key-value trees, and folder statistics (size, # of files, EEG count).
-- Saves metadata in Excel for analysis.
-- Includes date filtering (`--pattern`) and logging.
-
-**Usage Example**:
-```
-python Natus_InfoServerScraper.py /path/to/natus/files -o metadata.xlsx -p SUBJECT_
-```
-
-**Usage Help Output**:
-```
-usage: Natus_InfoServerScraper.py [-h] [-o OUTPUT] [-p PATTERN] input_dir
-Natus_InfoServerScraper.py: error: the following arguments are required: input_dir
-```
+- **Step X — Provenance / KPI / large-scale comparison**
+  - Folder KPIs, log parsing, file comparisons
+  - Compressed archive validation & maintenance
 
 ---
 
-### 5. `NatusExportList_Generator.py`
-- Scans for EEG session folders matching a **strict naming pattern** (1 tilde, 1 underscore, 4 dashes).
-- Creates a structured text list of EEG files paired with a **constant configuration path**.
-- Useful for **batch exports** with Natus NeuroWorks software.
-- No extra dependencies required.
+## Quick start
 
-**Usage Example**:
-```
-python NatusExportList_Generator.py /data/eeg output_list.txt D:\Neuroworks\Settings\quantum_new.exp
+### 1) Create a Python environment
+
+```bash
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
 ```
 
-**Usage Help Output**:
-```
-Usage: NatusExportList_Generator.py <main_folder> <output_file> [constant_path]
+### 2) Install dependencies
+
+This repo contains a mix of standalone scripts and packaged modules. Install what you need for the tools you plan to run.
+
+Common dependencies you may encounter:
+- `pandas`, `openpyxl` (Excel / TSV tooling)
+- `PySimpleGUI` (some GUIs)
+- `torch`, `transformers` (optional: ML-based redaction)
+
+If you maintain an internal requirements file, install it here, e.g.:
+
+```bash
+pip install -r requirements.txt
 ```
 
 ---
 
-### 6. `TSV_dates_checker.py`
-- Analyzes a TSV file with EEG session data to:
-  - Identify **missing days**.
-  - Detect **days with insufficient (<23h) recording time**.
-  - List **days with multiple sessions**.
-- Outputs results to a **log file** with timestamps.
-- Useful for **quality control and compliance checks**.
+## Recommended entry points
 
-**Usage Example**:
-```
-python TSV_dates_checker.py sessions.tsv log.txt
-```
+### Toolbox launcher (catalog-driven)
 
-**Usage Help Output**:
-```
-usage: TSV_dates_checker.py [-h] tsv_file log_file
+- **`src/toolbox_manager.py`**
+  - Central launcher / orchestrator for tools (typically driven by `src/tools_catalog.ini`).
 
-Check if daily recording duration meets minimum requirements.
+### Direct GUI scripts (run as needed)
 
-positional arguments:
-  tsv_file    Path to the TSV file containing session information
-  log_file    Path to the log file (appends logs, does not overwrite)
+- **`gui/GUI_Natus_Metadata_Viewer.py`**
+- **`src/natus_edf_tools/StepA_Natus_landing_ingestion/.../*GUI*.py`**
+- **`src/natus_edf_tools/StepB_EDF_transformation/.../*GUI*.py`**
+- **`src/natus_edf_tools/StepC_BIDS_management/.../*GUI*.py`**
 
-options:
-  -h, --help  show this help message and exit
-```
+> Many tools have dedicated README/User-Guide files near the script (see the **Docs** section below).
 
 ---
 
-### 7. `TSV_JSON_redacting_tool.py`
-- Redacts personal identifiers (first/last names) from **TSV and JSON** files.
-- Uses a provided Excel list of names.
-- Supports multiple name separators and formats.
-- Creates **backups** of modified files.
-- Processes folders **recursively**.
+## Repository layout
 
-**Usage Example**:
+Below is the high-level layout (non-exhaustive):
+
 ```
-python TSV_JSON_redacting_tool.py names.xlsx /data/files backup_original backup_updated
+doc/                       Documentation (README, GUI guide, slides)
+gui/                       Standalone GUIs (plus GUI modules)
+models/                    ML artifacts (e.g., RoBERTa redaction model)
+src/                       Main codebase (launcher, pipeline steps, shared libs)
+templates/                 Export/config templates (e.g., .exp files)
+_tbd/                      Work-in-progress / staging area (not production)
 ```
 
-**Usage Help Output**:
-```
-usage: TSV_JSON_redacting_tool.py [-h] [excel_path] [input_folder] [backup_folder_org] [backup_folder_upd]
+### `doc/`
+- `doc/README.md` – documentation hub (start here for detailed guides)
+- `doc/StepA3_GUI_README.md` – GUI-specific guide(s)
+- `doc/natus_edf_redaction_bids_pipeline.pptx` – pipeline overview slides
 
-Redact names from TSV and JSON files.
+### `gui/`
+- `GUI_Natus_Metadata_Viewer.py` – metadata inspection GUI
+- `Modules/StepA3_GUI.py` – shared GUI module(s)
 
-positional arguments:
-  excel_path         Path to the Excel file
-  input_folder       Folder containing TSV/JSON files
-  backup_folder_org  Folder to store original files
-  backup_folder_upd  Folder2 to store newly generated files
+### `models/redactor/`
+Artifacts used by the ML redaction pathway (tokenizer files, model weights, configs).
 
-options:
-  -h, --help         show this help message and exit
-```
+### `src/` (core)
+
+#### Top-level in `src/`
+- `toolbox_manager.py` – toolbox launcher
+- `tools_catalog.ini` – tool catalog (used by launcher)
+- `log_path.env` + `log_path_env_init.ps1` – logging path configuration
+- `logs/` – run logs and tool outputs
+
+#### `src/common_libs/`
+Shared libraries used across the pipeline:
+- `anonymization/edf_anonymizer.py` – anonymization helpers
+- `archiving/` – checksum + archive helpers (RAR, folder comparisons, tree generator)
+- `edflib_fork_mld/` – EDF reader/writer fork and utilities
+- `legacy/` – legacy tools and launchers (kept for backward compatibility)
+- `organizing_code/` – environment helpers
+
+#### `src/natus_edf_tools/` (pipeline steps)
+
+**Step A — Natus landing & ingestion**
+- `NatusFiles_CleanUp/` – post-archiving cleanup (CLI + GUI)
+- `Natus_EDFExport/` – export automation helpers
+- `Natus_Scout/` – session finder GUI (+ docs / INI configs)
+- `Quasar_EDFCompatCheck/` – EDF compatibility check (GUI + tool)
+- `_legacy/` – older ingestion tooling (kept for reference)
+
+**Step B — EDF transformation**
+- `EDF_Clipping/` – EDF time calculator and clipping helpers
+- `LabelCopy_Redaction/` – EDF cleaner / redactor GUI + helpers
+- `_legacy/StepB0_Eval/` + `_legacy/StepB5_edf_verification/` – evaluation & verification scripts
+
+**Step C — BIDS management**
+- `BIDS_Consolidation/` – structure generation, shifting, consolidation, participants merge
+- `BIDS_Verification/` – folder summarizer, verifier, coverage mapper, utilities
+- `BIDS_cleanup/` – logged deletion, archive/cleanup tools
+- `BIDS_validation_toolbox/` – structured validator app (core/app/features/utils)
+- `Redaction_TSV/` – TSV/JSON redaction:
+  - `regex_method/` – rule-based redaction pipeline
+  - `roberta_method/` – ML-based redaction pipeline
+- `SEEG2BIDS/` – SEEG conversion helpers
+- `data2bids/` – bundled third-party / integrated tooling for BIDS conversion
+
+**Step X — Provenance / KPI tools**
+- Folder KPIs, log parsing, large-file comparisons, compressed folder statistics.
+
+### `_tbd/`
+A staging area for experimental or in-progress scripts. Expect overlaps with production equivalents under `src/natus_edf_tools/`.
 
 ---
 
-### 8. `TSV_Participant_Merger.py`
-- Merges two TSV files **row-wise** and saves the combined data.
-- Ideal for unifying participant metadata from multiple sources.
+## Where to find help
 
-**Usage Example**:
-```
-python TSV_Participant_Merger.py file1.tsv file2.tsv merged.tsv
-```
-
-**Usage Help Output**:
-```
-usage: TSV_Participant_Merger.py [-h] file1 file2 output_file
-
-Merge two TSV files row-wise.
-
-positional arguments:
-  file1        Path to the first TSV file.
-  file2        Path to the second TSV file.
-  output_file  Path to save the merged TSV file.
-
-options:
-  -h, --help   show this help message and exit
-```
+- **Start with**: `doc/README.md`
+- Look for script-specific docs near each tool:
+  - `*_README.md`, `*_User_Guide.md`, `*.ini` config files
+- Many tools produce logs under `src/logs/` (or the path set by `src/log_path.env`).
 
 ---
 
-## ✅ Key Features
+## License
 
-- Rich metadata extraction for EDF and Natus EEG formats.
-- Redaction of identifiable information.
-- File list generation for structured exports.
-- Quality control tools for verifying EEG duration coverage.
-- Modular CLI tools with a centralized launcher GUI.
-- Efficient handling of **large datasets**.
-- Licensed under the **MIT License**.
-
----
-
-## 🧪 Requirements
-
-- Python 3.x
-- Dependencies (varies per script): `pandas`, `openpyxl`, `PySimpleGUI`
-
----
-
-## 🧭 Example Workflows
-
-1. **Scan EDF files** → `EDF_dir_scanner.py`
-2. **Extract nested Natus metadata** → `Natus_InfoServerScraper.py`
-3. **Redact personal data before sharing** → `TSV_JSON_redacting_tool.py`
-4. **Check data coverage over multiple days** → `TSV_dates_checker.py`
-5. **Create export list for Natus** → `NatusExportList_Generator.py`
-6. **Merge participant info** → `TSV_Participant_Merger.py`
-
----
-
-## 🔒 License
-All scripts are released under the **MIT License**, allowing flexible reuse with attribution.
+MIT (see repository license file).
