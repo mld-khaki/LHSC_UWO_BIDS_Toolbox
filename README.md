@@ -1,12 +1,17 @@
 <p align="center">
-  <img src="https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/splash.png" alt="LHSC / UWO BIDS Toolbox splash" />
+  <img src=https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/splash.png "Milad Khaki BIDS Tools"/>
 </p>
+
 
 # LHSC / UWO Natus → EDF → BIDS Toolbox
 
 A modular suite of Python tools for **Natus EEG workflows**, **EDF handling**, **BIDS organization**, **redaction/anonymization**, **quality control**, and **archiving**. The repository is organized as a step-based pipeline (**Step A → B → C**) with additional “Step X” utilities for verification, provenance, and KPI reporting.
 
+<<<<<<< HEAD
 > **Tip:** Most tools are standalone scripts (CLI and/or GUI). You can run them directly, or use the toolbox launcher in `src/toolbox_manager.py` if configured for your environment.
+=======
+This GitHub repository provides a suite of Python tools for processing, analyzing, redacting, and managing EEG data files, primarily focused on EDF and Natus EEG formats. The tools are designed for researchers and clinicians working with large EEG datasets. A centralized GUI script (`toolbox_manager.py`) facilitates launching each tool with the appropriate arguments.
+>>>>>>> 83f14b34219bf3103ffbea7ca99d26effacad28c
 
 ---
 
