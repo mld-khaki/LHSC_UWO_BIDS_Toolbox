@@ -19,3 +19,11 @@ __pycache__/
 *.ini
 *.bk*
 *.prv
+/src/common_libs/legacy
+/src/natus_edf_tools/_legacy
+/src/natus_edf_tools/StepB_EDF_transformation/_legacy
+/src/natus_edf_tools/StepA_Natus_landing_ingestion/_legacy
+/src/natus_edf_tools/StepC_BIDS_management/SEEG2BIDS/_legacy
+/src/natus_edf_tools/StepC_BIDS_management/Redaction_TSV/_legacy
+/src/natus_edf_tools/StepC_BIDS_management/Redaction_TSV/roberta_method/_legacy
+models/redactor/robarta_pytorch_model.bin

@@ -1,0 +1,93 @@
+{
+    "general": {
+        "recording_labels": "full,clip,stim,ccep",
+        "default_recording_type": "iEEG",
+        "channel_threshold_ieeg": 60,
+        "clip_duration_threshold_hours": 5,
+        "phi_redactor_model_path": "phi_redactor_model",
+        "resident_scan_interval_seconds": 30
+    },
+    "json_metadata": {
+        "TaskName": "EEG Clinical",
+        "Experimenter": [
+            ""
+        ],
+        "Lab": "",
+        "InstitutionName": "",
+        "InstitutionAddress": "",
+        "ExperimentDescription": "",
+        "DatasetName": ""
+    },
+    "equipment_info": {
+        "Manufacturer": "Natus",
+        "ManufacturersModelName": "Neuroworks",
+        "PowerLineFrequency": 60,
+        "RecordingType": "continuous",
+        "iEEGElectrodeInfo": {
+            "Manufacturer": "AdTech",
+            "Type": "depth",
+            "Material": "Platinum",
+            "Diameter": 0.86
+        },
+        "EEGElectrodeInfo": {
+            "Manufacturer": "AdTech",
+            "Type": "scalp",
+            "Material": "Platinum",
+            "Diameter": 10
+        }
+    },
+    "channel_info": {
+        "Patient Event": {
+            "type": "PatientEvent",
+            "name": "PE"
+        },
+        "DC": {
+            "type": "DAC",
+            "name": "DAC"
+        },
+        "TRIG": {
+            "type": "TRIG",
+            "name": "TR"
+        },
+        "OSAT": {
+            "type": "OSAT",
+            "name": "OSAT"
+        },
+        "PR": {
+            "type": "PR",
+            "name": "MISC"
+        },
+        "Pleth": {
+            "type": "Pleth",
+            "name": "MISC"
+        },
+        "EDF Annotations": {
+            "type": "Annotations",
+            "name": "ANNO"
+        },
+        "X": {
+            "type": "unused",
+            "name": "unused"
+        },
+        "EKG": {
+            "type": "EKG",
+            "name": "EKG"
+        },
+        "EMG": {
+            "type": "EMG",
+            "name": "EMG"
+        },
+        "EOG": {
+            "type": "EOG",
+            "name": "EOG"
+        },
+        "ECG": {
+            "type": "ECG",
+            "name": "ECG"
+        },
+        "SpO2": {
+            "type": "SpO2",
+            "name": "SpO2"
+        }
+    }
+}
