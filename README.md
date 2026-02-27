@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/natus-edf-tools/splash.png "Milad Khaki BIDS Tools"/>
+  <img src=https://github.com/mld-khaki/LHSC_UWO_BIDS_Toolbox/blob/main/splash.png "Milad Khaki BIDS Tools"/>
 </p>
 
 
