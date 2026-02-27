@@ -5,7 +5,7 @@
 
 # EEG Data Tools Suite – Comprehensive Repository Summary
 
-This GitHub repository provides a suite of Python tools for processing, analyzing, redacting, and managing EEG data files, primarily focused on EDF and Natus EEG formats. The tools are designed for researchers and clinicians working with large EEG datasets. A centralized GUI script (`_MK_EDF_handler.py`) facilitates launching each tool with the appropriate arguments.
+This GitHub repository provides a suite of Python tools for processing, analyzing, redacting, and managing EEG data files, primarily focused on EDF and Natus EEG formats. The tools are designed for researchers and clinicians working with large EEG datasets. A centralized GUI script (`toolbox_manager.py`) facilitates launching each tool with the appropriate arguments.
 
 ---
 
