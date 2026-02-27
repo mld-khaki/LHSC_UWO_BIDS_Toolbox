@@ -97,8 +97,6 @@ _tbd/                      Work-in-progress / staging area (not production)
 ```
 
 ### `doc/`
-- `doc/README.md` – documentation hub (start here for detailed guides)
-- `doc/StepA3_GUI_README.md` – GUI-specific guide(s)
 - `doc/natus_edf_redaction_bids_pipeline.pptx` – pipeline overview slides
 
 ### `gui/`
