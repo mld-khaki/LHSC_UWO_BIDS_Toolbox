@@ -174,6 +174,7 @@ def extract_edf_summary(
             summary["annotation_error"] = repr(e)
             summary["annotations_present"] = False
             summary["annotations"] = []
+            raise(e)
 
     return summary
 
@@ -233,6 +234,7 @@ def _mp_extract_worker(
     except Exception as e:
         tb = traceback.format_exc()
         result_q.put(("err", None, f"{repr(e)}\n{tb}"))
+        raise(e)
 
 
 # ---------------------------------------------------------------------

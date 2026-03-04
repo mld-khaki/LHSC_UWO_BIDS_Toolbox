@@ -36,8 +36,10 @@ import pandas as pd
 
 # Import local EDF reader
 from common_libs.edflib_fork_mld.edfreader_mld2 import EDFreader, EDFexception as EDFException
+#from common_libs.edflib_fork_mld.edfreader import EDFreader, EDFexception as EDFException
 from common_libs.anonymization.edf_anonymizer import anonymize_edf_file
 
+EDFREADER_VERBOSE=1
 # ============================================================================
 # Configuration Management
 # ============================================================================
@@ -757,8 +759,8 @@ class EDFProcessor:
             for a in annotations:
                 a["description"] = " "
             return annotations
-        except Exception:
-            raise
+        except Exception as e:
+            raise (e)
 
 
 
@@ -830,7 +832,8 @@ class EDFProcessor:
                     dur_val = duration
                     try:
                         dur_val = float(duration)
-                    except Exception:
+                    except Exception as e:
+                        raise(e)
                         pass
 
                     if desc_clean == "":
@@ -873,8 +876,8 @@ class EDFProcessor:
             edf.close()
             return annotations
 
-        except Exception:
-            raise
+        except Exception as e:
+            raise(e)
 
 # ============================================================================
 # PHI Redaction for TSV Files
@@ -1130,6 +1133,7 @@ class EDF2BIDSConverter:
 
             # write marker next to source EDF
             self._write_input_sidecar(edf_path, success=False, logs=logs)
+            raise(e)
 
             return False, logs            
     
