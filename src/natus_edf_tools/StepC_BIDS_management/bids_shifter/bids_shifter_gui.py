@@ -65,7 +65,7 @@ from modules import (
     generate_tsv_records,
 )
 from modules.config import TREE_COLUMNS, COLUMN_WIDTH_RATIOS
-
+from modules.edf_utils import get_edfreader_error
 
 class BIDSShifterGUI:
     """Main GUI application for BIDS session management."""
@@ -1082,7 +1082,11 @@ class BIDSShifterGUI:
             return
         
         if not is_edfreader_available():
-            messagebox.showerror("Error", "EDFreader not available.")
+            err_msg = get_edfreader_error() or "Unknown import error"
+            messagebox.showerror("Error", 
+                f"EDFreader not available.\n\n"
+                f"Make sure edfreader_mld2.py is in the same folder as bids_shifter_gui.py\n\n"
+                f"Details:\n{err_msg}")
             return
         
         base = os.path.basename(os.path.normpath(self.root_dir))

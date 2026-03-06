@@ -6,7 +6,7 @@ Configuration constants for BIDS Shifter GUI.
 import re
 
 # Debug flag - set to True to raise exceptions for debugging
-EXCEPTION_DEBUG = True
+EXCEPTION_DEBUG = False
 
 # Session pattern: ses-XXX where XXX is 3 digits
 SESSION_PATTERN = re.compile(r"ses-(\d{3})")

@@ -5,30 +5,59 @@ Handles EDF file reading and metadata extraction.
 """
 
 import os
+import sys
 from .config import EXCEPTION_DEBUG
 from .utils import iso_fmt_T, log_line
 
 
 # Try to import EDFreader from various locations
 _EDFreader = None
+_import_error_msg = None
 
 def _init_edfreader():
     """Initialize EDFreader on first use."""
-    global _EDFreader
+    global _EDFreader, _import_error_msg
     
     if _EDFreader is not None:
         return _EDFreader
     
+    # Try multiple import strategies
+    import_attempts = []
+    
+    # Strategy 1: Direct import (if edfreader_mld2.py is in Python path)
     try:
         from edfreader_mld2 import EDFreader
         _EDFreader = EDFreader
-    except ImportError:
-        try:
-            from edfreader_mld2 import EDFreader
-            _EDFreader = EDFreader
-        except ImportError:
-            _EDFreader = False  # Mark as unavailable
+        return _EDFreader
+    except ImportError as e:
+        import_attempts.append(f"Direct import: {e}")
     
+    # Strategy 2: Import from parent directory (common case)
+    try:
+        # Add parent directory to path temporarily
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(current_dir)
+        
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from edfreader_mld2 import EDFreader
+        _EDFreader = EDFreader
+        return _EDFreader
+    except ImportError as e:
+        import_attempts.append(f"Parent dir import: {e}")
+    
+    # Strategy 3: Try common_libs path (legacy)
+    try:
+        from common_libs.edflib_fork_mld.edfreader_mld2 import EDFreader
+        _EDFreader = EDFreader
+        return _EDFreader
+    except ImportError as e:
+        import_attempts.append(f"common_libs import: {e}")
+    
+    # All strategies failed
+    _EDFreader = False
+    _import_error_msg = "\n".join(import_attempts)
     return _EDFreader
 
 
@@ -36,6 +65,13 @@ def is_edfreader_available():
     """Check if EDFreader is available."""
     reader = _init_edfreader()
     return reader is not False and reader is not None
+
+
+def get_edfreader_error():
+    """Get the error message if EDFreader import failed."""
+    global _import_error_msg
+    _init_edfreader()  # Ensure we've tried to import
+    return _import_error_msg
 
 
 def read_edf_metadata(filepath, log_path=None):
@@ -56,7 +92,7 @@ def read_edf_metadata(filepath, log_path=None):
     EDFreader = _init_edfreader()
     
     if not EDFreader:
-        log_line(log_path, "ERROR: EDFreader not available")
+        log_line(log_path, f"ERROR: EDFreader not available. {_import_error_msg}")
         return None
     
     try:
@@ -95,6 +131,11 @@ def generate_tsv_records(root_dir, log_path=None):
     """
     records = []
     
+    if not is_edfreader_available():
+        log_line(log_path, f"ERROR: Cannot generate TSV - EDFreader not available")
+        log_line(log_path, f"Import errors: {_import_error_msg}")
+        return records
+    
     for root, dirs, files in os.walk(root_dir):
         for fn in files:
             if not fn.lower().endswith(".edf"):
@@ -115,5 +156,7 @@ def generate_tsv_records(root_dir, log_path=None):
     
     # Sort by acquisition time (ISO 8601 is sortable)
     records.sort(key=lambda t: t[1])
+    
+    log_line(log_path, f"Generated {len(records)} TSV records from EDF files")
     
     return records
