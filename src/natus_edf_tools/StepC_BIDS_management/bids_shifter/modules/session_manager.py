@@ -6,8 +6,16 @@ Handles shifting, swapping, and normalizing session numbers.
 
 import os
 import re
-from .config import SESSION_PATTERN, EXCEPTION_DEBUG
-from .utils import extract_session_from_filename, extract_session_number, log_line
+import shutil
+from .config import SESSION_PATTERN, BIDS_FILE_EXTENSIONS, EXCEPTION_DEBUG
+from .utils import (
+    extract_session_from_filename, 
+    extract_session_from_basename,
+    extract_session_number, 
+    is_bids_file,
+    check_session_discrepancy,
+    log_line
+)
 
 
 class SessionManager:
@@ -110,6 +118,71 @@ class SessionManager:
         log_line(self.log_path, f"Swapped sessions: {ses_a} <-> {ses_b}")
         return True
     
+    def increment_session(self, rows, session):
+        """
+        Increment a session number by 1.
+        
+        Args:
+            rows: List of TSV row dicts (modified in place)
+            session: Session string to increment (e.g., "ses-002")
+        
+        Returns:
+            New session string, or None if failed
+        """
+        if not session:
+            return None
+        
+        num = extract_session_number(session)
+        new_num = num + 1
+        new_session = f"ses-{new_num:03d}"
+        
+        # Update all rows with this session
+        modified = 0
+        for row in rows:
+            fn = row.get("filename", "")
+            if extract_session_from_filename(fn) == session:
+                row["filename"] = fn.replace(session, new_session)
+                modified += 1
+        
+        if modified > 0:
+            log_line(self.log_path, f"Incremented session: {session} -> {new_session} ({modified} rows)")
+            return new_session
+        return None
+    
+    def decrement_session(self, rows, session):
+        """
+        Decrement a session number by 1.
+        
+        Args:
+            rows: List of TSV row dicts (modified in place)
+            session: Session string to decrement (e.g., "ses-002")
+        
+        Returns:
+            New session string, or None if failed or already at ses-001
+        """
+        if not session:
+            return None
+        
+        num = extract_session_number(session)
+        if num <= 1:
+            return None  # Can't go below ses-001
+        
+        new_num = num - 1
+        new_session = f"ses-{new_num:03d}"
+        
+        # Update all rows with this session
+        modified = 0
+        for row in rows:
+            fn = row.get("filename", "")
+            if extract_session_from_filename(fn) == session:
+                row["filename"] = fn.replace(session, new_session)
+                modified += 1
+        
+        if modified > 0:
+            log_line(self.log_path, f"Decremented session: {session} -> {new_session} ({modified} rows)")
+            return new_session
+        return None
+    
     def normalize_to_sequence(self, rows, original_rows, view_order):
         """
         Renumber sessions to ses-001..ses-N based on view order.
@@ -169,6 +242,33 @@ class SessionManager:
             Updated filename
         """
         return filename.replace(old_ses, new_ses) if old_ses and new_ses else filename
+    
+    def find_discrepancies(self, rows):
+        """
+        Find rows where folder session doesn't match filename session.
+        
+        Args:
+            rows: List of TSV row dicts
+        
+        Returns:
+            List of (row_index, folder_session, filename_session) tuples
+        """
+        discrepancies = []
+        
+        for i, row in enumerate(rows):
+            filepath = row.get("filename", "")
+            if not filepath:
+                continue
+            
+            basename = os.path.basename(filepath)
+            result = check_session_discrepancy(filepath, basename)
+            
+            if result:
+                folder_ses, filename_ses = result
+                discrepancies.append((i, folder_ses, filename_ses))
+                log_line(self.log_path, f"Discrepancy found: {filepath} (folder={folder_ses}, file={filename_ses})")
+        
+        return discrepancies
 
 
 class FolderManager:
@@ -198,6 +298,181 @@ class FolderManager:
                     folders.add(item)
         
         return folders
+    
+    def find_empty_folders(self):
+        """
+        Find session folders that contain no EDF or TSV files.
+        
+        Returns:
+            List of (folder_name, file_count) tuples for empty folders
+            file_count is the number of other files (non-EDF, non-TSV)
+        """
+        from .config import SESSION_FOLDER_PATTERN
+        
+        empty_folders = []
+        
+        if not self.root_dir or not os.path.isdir(self.root_dir):
+            return empty_folders
+        
+        for item in os.listdir(self.root_dir):
+            if not SESSION_FOLDER_PATTERN.match(item):
+                continue
+            
+            folder_path = os.path.join(self.root_dir, item)
+            if not os.path.isdir(folder_path):
+                continue
+            
+            # Count files by type
+            edf_count = 0
+            tsv_count = 0
+            other_count = 0
+            
+            for root, dirs, files in os.walk(folder_path):
+                for fn in files:
+                    lower = fn.lower()
+                    if lower.endswith(".edf"):
+                        edf_count += 1
+                    elif lower.endswith(".tsv"):
+                        tsv_count += 1
+                    else:
+                        other_count += 1
+            
+            # Empty means no EDF and no TSV (other files can exist)
+            if edf_count == 0 and tsv_count == 0:
+                empty_folders.append((item, other_count))
+                log_line(self.log_path, f"Empty folder found: {item} ({other_count} other files)")
+        
+        return empty_folders
+    
+    def delete_folder(self, folder_name):
+        """
+        Delete a session folder.
+        
+        Args:
+            folder_name: Session folder name like "ses-001"
+        
+        Returns:
+            True if deleted successfully
+        """
+        folder_path = os.path.join(self.root_dir, folder_name)
+        
+        if not os.path.isdir(folder_path):
+            log_line(self.log_path, f"Folder not found: {folder_path}")
+            return False
+        
+        try:
+            shutil.rmtree(folder_path)
+            log_line(self.log_path, f"Deleted folder: {folder_name}")
+            return True
+        except Exception as e:
+            log_line(self.log_path, f"Error deleting folder {folder_name}: {e}")
+            if EXCEPTION_DEBUG:
+                raise e
+            return False
+    
+    def sync_files_to_folders(self, dry_run=False):
+        """
+        Rename files to match their folder's session number.
+        
+        Args:
+            dry_run: If True, only report what would be done
+        
+        Returns:
+            List of (old_path, new_path, status) tuples
+        """
+        from .config import SESSION_FOLDER_PATTERN
+        
+        results = []
+        
+        if not self.root_dir or not os.path.isdir(self.root_dir):
+            return results
+        
+        log_line(self.log_path, f"===== SYNC FILES TO FOLDERS {'(DRY RUN)' if dry_run else ''} =====")
+        
+        for session_folder in os.listdir(self.root_dir):
+            if not SESSION_FOLDER_PATTERN.match(session_folder):
+                continue
+            
+            folder_path = os.path.join(self.root_dir, session_folder)
+            if not os.path.isdir(folder_path):
+                continue
+            
+            folder_ses_num = session_folder.split("-")[1]  # "001"
+            
+            # Walk all files in this session folder
+            for root, dirs, files in os.walk(folder_path):
+                for fn in files:
+                    # Check if this is a BIDS file with session in name
+                    if not is_bids_file(fn):
+                        continue
+                    
+                    file_ses = extract_session_from_basename(fn)
+                    if not file_ses:
+                        continue  # No session in filename
+                    
+                    # Check if mismatch
+                    if file_ses == session_folder:
+                        continue  # Already matches
+                    
+                    # Build new filename
+                    new_fn = SESSION_PATTERN.sub(f"ses-{folder_ses_num}", fn)
+                    
+                    old_path = os.path.join(root, fn)
+                    new_path = os.path.join(root, new_fn)
+                    
+                    if dry_run:
+                        log_line(self.log_path, f"[DRY] Would rename: {fn} -> {new_fn}")
+                        results.append((old_path, new_path, "dry_run"))
+                    else:
+                        try:
+                            os.rename(old_path, new_path)
+                            log_line(self.log_path, f"Renamed: {fn} -> {new_fn}")
+                            results.append((old_path, new_path, "renamed"))
+                        except Exception as e:
+                            log_line(self.log_path, f"Error renaming {fn}: {e}")
+                            results.append((old_path, new_path, f"error: {e}"))
+                            if EXCEPTION_DEBUG:
+                                raise e
+        
+        log_line(self.log_path, f"===== SYNC COMPLETE: {len(results)} files =====")
+        return results
+    
+    def get_discrepant_files(self):
+        """
+        Find all files where filename session doesn't match folder session.
+        
+        Returns:
+            List of (relative_path, folder_session, filename_session) tuples
+        """
+        from .config import SESSION_FOLDER_PATTERN
+        
+        discrepancies = []
+        
+        if not self.root_dir or not os.path.isdir(self.root_dir):
+            return discrepancies
+        
+        for session_folder in os.listdir(self.root_dir):
+            if not SESSION_FOLDER_PATTERN.match(session_folder):
+                continue
+            
+            folder_path = os.path.join(self.root_dir, session_folder)
+            if not os.path.isdir(folder_path):
+                continue
+            
+            for root, dirs, files in os.walk(folder_path):
+                for fn in files:
+                    if not is_bids_file(fn):
+                        continue
+                    
+                    file_ses = extract_session_from_basename(fn)
+                    if not file_ses:
+                        continue
+                    
+                    if file_ses != session_folder:
+                        rel_path = os.path.relpath(os.path.join(root, fn), self.root_dir)
+                        discrepancies.append((rel_path, session_folder, file_ses))
+        
+        return discrepancies
     
     def rename_folders(self, old_to_new_map, dry_run=False):
         """

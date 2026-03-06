@@ -8,13 +8,23 @@ A graphical tool for managing BIDS session data:
 - Check TSV vs folder consistency
 - Import sessions from another folder
 - Generate TSV from EDF files
+- Sync files to folder session numbers
+- Find and delete empty folders
+- Validate all checks at once
 
 Modular version with bug fixes:
 - Fixed: Duplicate finder now correctly shows session numbers
+- Fixed: Move up/down now increments/decrements by 1 (not swap)
 - New: Import sessions from another subject folder
+- New: Sync files to folder session numbers
+- New: Find empty folders
+- New: Validate All button
+- New: Color legend
+- New: Undo functionality
+- New: Auto-check discrepancies on load
 
 Author: Based on original by Nasim
-Version: 2.0.0 (Modular)
+Version: 2.1.0 (Enhanced)
 """
 
 import os
@@ -35,14 +45,17 @@ except ImportError:
 from modules import (
     EXCEPTION_DEBUG,
     TREE_TAGS,
+    COLOR_LEGEND,
     DEFAULT_TSV_COLUMNS,
     log_line,
     todays_log_path,
     extract_session_from_filename,
+    extract_session_from_basename,
     extract_session_number,
     normalize_date,
     format_duration_key,
     get_timestamp_suffix,
+    check_session_discrepancy,
     TSVManager,
     SessionManager,
     FolderManager,
@@ -59,8 +72,8 @@ class BIDSShifterGUI:
     
     def __init__(self, root):
         self.root = root
-        self.root.title("BIDS Session Shifter & TSV Tools v2.0")
-        self.root.geometry("1400x850")
+        self.root.title("BIDS Session Shifter & TSV Tools v2.1")
+        self.root.geometry("1400x900")
         
         # Core state
         self.root_dir = ""
@@ -77,6 +90,13 @@ class BIDSShifterGUI:
         self.dry_run = tk.BooleanVar(value=True)
         self.sort_sessions = tk.BooleanVar(value=False)
         
+        # Undo state - stores snapshots before operations
+        self.undo_stack = []
+        self.max_undo = 10
+        
+        # Current discrepancies (for highlighting)
+        self.current_discrepancies = set()  # Set of row indices
+        
         # Build UI
         self._build_ui()
     
@@ -87,6 +107,7 @@ class BIDSShifterGUI:
         self._build_toolbar()
         self._build_shift_controls()
         self._build_table()
+        self._build_legend()
         self._configure_tags()
     
     def _build_toolbar(self):
@@ -120,6 +141,19 @@ class BIDSShifterGUI:
                   command=self.check_durations).pack(side="left", padx=2)
         tk.Button(left, text="Find Duplicates", 
                   command=self.find_duplicates).pack(side="left", padx=2)
+        
+        ttk.Separator(left, orient="vertical").pack(side="left", padx=6, fill="y")
+        
+        # New buttons
+        tk.Button(left, text="Find Empty Folders", 
+                  command=self.find_empty_folders,
+                  bg="#fff3cd").pack(side="left", padx=2)
+        tk.Button(left, text="Sync Files→Folders", 
+                  command=self.sync_files_to_folders,
+                  bg="#cce5ff").pack(side="left", padx=2)
+        tk.Button(left, text="Validate All", 
+                  command=self.validate_all,
+                  bg="#d4edda").pack(side="left", padx=2)
         
         ttk.Separator(left, orient="vertical").pack(side="left", padx=6, fill="y")
         
@@ -160,9 +194,16 @@ class BIDSShifterGUI:
         
         ttk.Separator(left, orient="vertical").pack(side="left", padx=8, fill="y")
         
-        tk.Button(left, text="Move Up", command=self.move_session_up).pack(side="left", padx=2)
-        tk.Button(left, text="Move Down", command=self.move_session_down).pack(side="left", padx=2)
+        # Move buttons - now increment/decrement
+        tk.Button(left, text="▲ Dec (-1)", command=self.move_session_up).pack(side="left", padx=2)
+        tk.Button(left, text="▼ Inc (+1)", command=self.move_session_down).pack(side="left", padx=2)
         tk.Button(left, text="Normalize 1..N", command=self.normalize_sessions).pack(side="left", padx=6)
+        
+        ttk.Separator(left, orient="vertical").pack(side="left", padx=8, fill="y")
+        
+        # Undo button
+        tk.Button(left, text="↶ Undo", command=self.undo_last,
+                  bg="#f8d7da").pack(side="left", padx=2)
         
         # Right: Apply
         tk.Button(frame, text="Apply Changes", 
@@ -192,6 +233,44 @@ class BIDSShifterGUI:
         # Auto-resize on window resize
         self.tree.bind("<Configure>", self._auto_resize_columns)
     
+    def _build_legend(self):
+        """Build the color legend at the bottom."""
+        legend_frame = tk.LabelFrame(self.root, text="Color Legend", padx=5, pady=5)
+        legend_frame.pack(fill="x", padx=8, pady=4)
+        
+        # Create a horizontal layout of color swatches
+        row_frame = tk.Frame(legend_frame)
+        row_frame.pack(fill="x")
+        
+        # Select key colors to show
+        key_colors = ["changed", "discrepancy", "missing_folder", "extra_folder", 
+                      "empty_folder", "dup_row", "imported"]
+        
+        for i, tag in enumerate(key_colors):
+            if tag not in COLOR_LEGEND:
+                continue
+            
+            color_desc, explanation = COLOR_LEGEND[tag]
+            tag_config = TREE_TAGS.get(tag, {})
+            
+            # Create color swatch
+            swatch = tk.Frame(row_frame, width=16, height=16, 
+                            bg=tag_config.get("background", "#ffffff"),
+                            highlightbackground="black", highlightthickness=1)
+            swatch.pack(side="left", padx=2)
+            swatch.pack_propagate(False)
+            
+            # If foreground color, add inner text indicator
+            if "foreground" in tag_config and "background" not in tag_config:
+                lbl = tk.Label(swatch, text="A", 
+                              fg=tag_config["foreground"], 
+                              font=("TkDefaultFont", 8))
+                lbl.pack(expand=True)
+            
+            # Label
+            tk.Label(row_frame, text=f"{explanation}", 
+                    font=("TkDefaultFont", 9)).pack(side="left", padx=(0, 12))
+    
     def _configure_tags(self):
         """Configure treeview tags for colored rows."""
         for tag_name, config in TREE_TAGS.items():
@@ -203,6 +282,41 @@ class BIDSShifterGUI:
         cols = [c[0] for c in TREE_COLUMNS]
         for col, ratio in zip(cols, COLUMN_WIDTH_RATIOS):
             self.tree.column(col, width=int(total * ratio))
+    
+    # ==================== UNDO FUNCTIONALITY ====================
+    
+    def _save_undo_state(self, description=""):
+        """Save current state to undo stack."""
+        if not self.tsv_manager.rows:
+            return
+        
+        state = {
+            "rows": [dict(r) for r in self.tsv_manager.rows],
+            "original_rows": [dict(r) for r in self.tsv_manager.original_rows],
+            "description": description
+        }
+        
+        self.undo_stack.append(state)
+        
+        # Limit stack size
+        if len(self.undo_stack) > self.max_undo:
+            self.undo_stack.pop(0)
+        
+        log_line(self.log_path, f"Saved undo state: {description}")
+    
+    def undo_last(self):
+        """Restore the last saved state."""
+        if not self.undo_stack:
+            messagebox.showinfo("Undo", "Nothing to undo.")
+            return
+        
+        state = self.undo_stack.pop()
+        self.tsv_manager.rows = state["rows"]
+        self.tsv_manager.original_rows = state["original_rows"]
+        
+        log_line(self.log_path, f"Restored undo state: {state['description']}")
+        self.refresh_table()
+        messagebox.showinfo("Undo", f"Restored: {state['description']}")
     
     # ==================== FILE/FOLDER SELECTION ====================
     
@@ -235,6 +349,29 @@ class BIDSShifterGUI:
             self.tsv_manager.original_rows = []
         
         self.refresh_table()
+        
+        # Auto-check for discrepancies (non-blocking)
+        self._auto_check_discrepancies()
+    
+    def _auto_check_discrepancies(self):
+        """Automatically check for discrepancies after loading (non-blocking)."""
+        if not self.tsv_manager.rows:
+            return
+        
+        # Find discrepancies in TSV rows
+        discrepancies = self.session_manager.find_discrepancies(self.tsv_manager.rows)
+        
+        if discrepancies:
+            self.current_discrepancies = {d[0] for d in discrepancies}
+            self.refresh_table()
+            
+            # Show non-blocking notification in status/title
+            count = len(discrepancies)
+            self.root.title(f"BIDS Shifter v2.1 - ⚠️ {count} discrepancies found")
+            log_line(self.log_path, f"Auto-check: {count} folder/filename discrepancies found")
+        else:
+            self.current_discrepancies = set()
+            self.root.title("BIDS Session Shifter & TSV Tools v2.1")
     
     def load_tsv_dialog(self):
         """Show dialog to select TSV file."""
@@ -245,6 +382,7 @@ class BIDSShifterGUI:
         if path:
             self.tsv_manager.load(path)
             self.refresh_table()
+            self._auto_check_discrepancies()
     
     def refresh_tsv(self):
         """Reload current TSV file."""
@@ -253,6 +391,7 @@ class BIDSShifterGUI:
             return
         self.tsv_manager.load(self.tsv_manager.tsv_path)
         self.refresh_table()
+        self._auto_check_discrepancies()
     
     def refresh_folder(self):
         """Refresh the table display."""
@@ -260,6 +399,7 @@ class BIDSShifterGUI:
             messagebox.showinfo("Info", "No root folder selected.")
             return
         self.refresh_table()
+        self._auto_check_discrepancies()
     
     # ==================== TABLE DISPLAY ====================
     
@@ -306,6 +446,15 @@ class BIDSShifterGUI:
             if r.get("_imported"):
                 tags.add("imported")
             
+            # Check for discrepancy (folder session != filename session)
+            if i in self.current_discrepancies:
+                tags.add("discrepancy")
+            else:
+                # Also check dynamically
+                discrepancy = check_session_discrepancy(fn, basename)
+                if discrepancy:
+                    tags.add("discrepancy")
+            
             rows.append((folder, basename, acq, str(dur), edt, tags))
         
         return rows
@@ -348,6 +497,8 @@ class BIDSShifterGUI:
             messagebox.showerror("Error", "Start must be <= end.")
             return
         
+        self._save_undo_state(f"Shift ses-{start:03d} to ses-{end:03d} by {delta}")
+        
         count = self.session_manager.shift_sessions_in_range(
             self.tsv_manager.rows, start, end, delta
         )
@@ -356,46 +507,41 @@ class BIDSShifterGUI:
         self.refresh_table()
     
     def move_session_up(self):
-        """Move selected session up (swap with previous)."""
+        """Decrement selected session number by 1."""
         cur = self._get_selected_session()
         if not cur:
-            messagebox.showinfo("Info", "Select a row to move up.")
+            messagebox.showinfo("Info", "Select a row to move up (decrement).")
             return
         
-        sessions = self.session_manager.get_ordered_sessions(self.tsv_manager.rows)
-        if cur not in sessions:
-            messagebox.showinfo("Info", f"{cur} not found.")
+        cur_num = extract_session_number(cur)
+        if cur_num <= 1:
+            messagebox.showinfo("Info", f"{cur} is already at minimum (ses-001).")
             return
         
-        idx = sessions.index(cur)
-        if idx == 0:
-            messagebox.showinfo("Info", f"{cur} is already first.")
-            return
+        self._save_undo_state(f"Decrement {cur}")
         
-        prev = sessions[idx - 1]
-        self.session_manager.swap_sessions(self.tsv_manager.rows, cur, prev)
-        self.refresh_table()
+        new_ses = self.session_manager.decrement_session(self.tsv_manager.rows, cur)
+        if new_ses:
+            self.refresh_table()
+            log_line(self.log_path, f"Decremented: {cur} -> {new_ses}")
+        else:
+            messagebox.showinfo("Info", f"Could not decrement {cur}.")
     
     def move_session_down(self):
-        """Move selected session down (swap with next)."""
+        """Increment selected session number by 1."""
         cur = self._get_selected_session()
         if not cur:
-            messagebox.showinfo("Info", "Select a row to move down.")
+            messagebox.showinfo("Info", "Select a row to move down (increment).")
             return
         
-        sessions = self.session_manager.get_ordered_sessions(self.tsv_manager.rows)
-        if cur not in sessions:
-            messagebox.showinfo("Info", f"{cur} not found.")
-            return
+        self._save_undo_state(f"Increment {cur}")
         
-        idx = sessions.index(cur)
-        if idx == len(sessions) - 1:
-            messagebox.showinfo("Info", f"{cur} is already last.")
-            return
-        
-        next_ses = sessions[idx + 1]
-        self.session_manager.swap_sessions(self.tsv_manager.rows, cur, next_ses)
-        self.refresh_table()
+        new_ses = self.session_manager.increment_session(self.tsv_manager.rows, cur)
+        if new_ses:
+            self.refresh_table()
+            log_line(self.log_path, f"Incremented: {cur} -> {new_ses}")
+        else:
+            messagebox.showinfo("Info", f"Could not increment {cur}.")
     
     def normalize_sessions(self):
         """Renumber sessions to 1..N."""
@@ -421,6 +567,8 @@ class BIDSShifterGUI:
         if not messagebox.askyesno("Confirm", 
                 f"Renumber sessions to:\n\n" + "\n".join(changes) + "\n\nProceed?"):
             return
+        
+        self._save_undo_state("Normalize 1..N")
         
         self.session_manager.normalize_to_sequence(
             self.tsv_manager.rows,
@@ -473,6 +621,9 @@ class BIDSShifterGUI:
                 messagebox.showerror("Error", "Failed to save TSV.")
                 return
             self.tsv_manager.commit_changes()
+            
+            # Clear undo stack after successful apply
+            self.undo_stack.clear()
         
         log_line(self.log_path, "===== APPLY END =====")
         
@@ -639,6 +790,208 @@ class BIDSShifterGUI:
         self.duplicate_finder.log_duplicate_details(duplicates)
         
         messagebox.showinfo("Duplicates Found", summary)
+    
+    # ==================== NEW: EMPTY FOLDERS ====================
+    
+    def find_empty_folders(self):
+        """Find and optionally delete empty session folders."""
+        if not self.root_dir or not self.folder_manager:
+            messagebox.showinfo("Info", "Select a subject root first.")
+            return
+        
+        empty = self.folder_manager.find_empty_folders()
+        
+        if not empty:
+            messagebox.showinfo("Empty Folders", "No empty folders found.")
+            return
+        
+        # Refresh table and show empty folders
+        self.refresh_table()
+        
+        # Add empty folders to tree
+        for folder_name, other_count in empty:
+            note = f"({other_count} other files)" if other_count > 0 else "(completely empty)"
+            self.tree.insert("", "end",
+                           values=(folder_name, note, "N/A", "N/A", "N/A"),
+                           tags=("empty_folder",))
+        
+        # Build message
+        msg = f"Found {len(empty)} empty folders (no EDF or TSV files):\n\n"
+        for folder_name, other_count in empty:
+            note = f" ({other_count} other files)" if other_count > 0 else ""
+            msg += f"  • {folder_name}{note}\n"
+        
+        msg += "\nWould you like to delete these folders?"
+        
+        if not messagebox.askyesno("Empty Folders", msg):
+            return
+        
+        # Confirm deletion
+        if not messagebox.askyesno("Confirm Delete", 
+                "Are you sure? This cannot be undone."):
+            return
+        
+        # Delete folders
+        deleted = 0
+        for folder_name, _ in empty:
+            if self.folder_manager.delete_folder(folder_name):
+                deleted += 1
+        
+        self.refresh_table()
+        messagebox.showinfo("Deleted", f"Deleted {deleted} of {len(empty)} empty folders.")
+    
+    # ==================== NEW: SYNC FILES TO FOLDERS ====================
+    
+    def sync_files_to_folders(self):
+        """Sync file session numbers to match their folder session numbers."""
+        if not self.root_dir or not self.folder_manager:
+            messagebox.showinfo("Info", "Select a subject root first.")
+            return
+        
+        # First check for discrepancies
+        discrepancies = self.folder_manager.get_discrepant_files()
+        
+        if not discrepancies:
+            messagebox.showinfo("Sync Files", "No discrepancies found. All files match their folders.")
+            return
+        
+        # Show preview
+        msg = f"Found {len(discrepancies)} files with mismatched session numbers:\n\n"
+        
+        for rel_path, folder_ses, file_ses in discrepancies[:15]:  # Limit display
+            basename = os.path.basename(rel_path)
+            msg += f"  • {basename}\n"
+            msg += f"      Folder: {folder_ses}, File: {file_ses}\n"
+        
+        if len(discrepancies) > 15:
+            msg += f"\n  ... and {len(discrepancies) - 15} more\n"
+        
+        msg += "\nThis will rename files to match their folder's session number."
+        msg += "\nProceed?"
+        
+        if not messagebox.askyesno("Sync Files to Folders", msg):
+            return
+        
+        # Perform sync
+        results = self.folder_manager.sync_files_to_folders(self.dry_run.get())
+        
+        # Also update TSV if not dry run
+        if not self.dry_run.get() and self.tsv_manager.rows:
+            self._save_undo_state("Sync files to folders (TSV update)")
+            
+            # Update TSV rows to match
+            for i, row in enumerate(self.tsv_manager.rows):
+                filepath = row.get("filename", "")
+                if not filepath:
+                    continue
+                
+                folder_ses = extract_session_from_filename(filepath)
+                basename = os.path.basename(filepath)
+                file_ses = extract_session_from_basename(basename)
+                
+                if folder_ses and file_ses and folder_ses != file_ses:
+                    # Update the filename in TSV
+                    new_basename = basename.replace(file_ses, folder_ses)
+                    new_filepath = filepath.replace(basename, new_basename)
+                    row["filename"] = new_filepath
+            
+            # Save TSV
+            if not self.tsv_manager.save():
+                messagebox.showwarning("Warning", "Files renamed but TSV save failed.")
+        
+        self.refresh_table()
+        self._auto_check_discrepancies()
+        
+        msg = "Dry run complete." if self.dry_run.get() else f"Synced {len(results)} files."
+        messagebox.showinfo("Sync Complete", msg)
+    
+    # ==================== NEW: VALIDATE ALL ====================
+    
+    def validate_all(self):
+        """Run all validation checks at once."""
+        if not self.root_dir:
+            messagebox.showinfo("Info", "Select a subject root first.")
+            return
+        
+        log_line(self.log_path, "===== VALIDATE ALL START =====")
+        
+        results = []
+        
+        # 1. Check TSV vs Folders
+        tsv_sessions = self.tsv_manager.get_all_sessions()
+        folder_sessions = self.folder_manager.get_session_folders() if self.folder_manager else set()
+        missing_folders = sorted(tsv_sessions - folder_sessions, key=extract_session_number)
+        extra_folders = sorted(folder_sessions - tsv_sessions, key=extract_session_number)
+        
+        if missing_folders:
+            results.append(f"❌ Missing folders: {len(missing_folders)}")
+        else:
+            results.append("✓ All TSV sessions have folders")
+        
+        if extra_folders:
+            results.append(f"⚠️ Extra folders (not in TSV): {len(extra_folders)}")
+        
+        # 2. Check discrepancies
+        discrepancies = self.session_manager.find_discrepancies(self.tsv_manager.rows)
+        self.current_discrepancies = {d[0] for d in discrepancies}
+        
+        if discrepancies:
+            results.append(f"⚠️ Folder/filename discrepancies: {len(discrepancies)}")
+        else:
+            results.append("✓ All filenames match their folders")
+        
+        # 3. Check empty folders
+        empty_folders = self.folder_manager.find_empty_folders() if self.folder_manager else []
+        if empty_folders:
+            results.append(f"⚠️ Empty folders: {len(empty_folders)}")
+        else:
+            results.append("✓ No empty folders")
+        
+        # 4. Check duplicates
+        duplicates = self.duplicate_finder.find_duplicates(self.tsv_manager.rows)
+        if duplicates:
+            total_dup = sum(len(v) for v in duplicates.values())
+            results.append(f"⚠️ Duplicate recordings: {len(duplicates)} groups ({total_dup} files)")
+        else:
+            results.append("✓ No duplicate recordings")
+        
+        # Refresh and apply all highlighting
+        self.refresh_table()
+        
+        # Apply missing folder tags
+        for iid in self.tree.get_children(""):
+            folder = self.tree.set(iid, "Folder")
+            tags = set(self.tree.item(iid, "tags"))
+            
+            if folder in missing_folders:
+                tags.add("missing_folder")
+            
+            # Check duplicates
+            acq = self.tree.set(iid, "Acq Time")
+            dur = self.tree.set(iid, "Duration (h)")
+            if self.duplicate_finder.is_duplicate_display_values(acq, dur, duplicates):
+                tags.add("dup_row")
+            
+            self.tree.item(iid, tags=tuple(tags))
+        
+        # Add extra folders
+        for ex in extra_folders:
+            self.tree.insert("", "end",
+                           values=(ex, "N/A", "N/A", "N/A", "N/A"),
+                           tags=("extra_folder",))
+        
+        # Add empty folders
+        for folder_name, other_count in empty_folders:
+            note = f"({other_count} other files)" if other_count > 0 else "(empty)"
+            self.tree.insert("", "end",
+                           values=(folder_name, note, "N/A", "N/A", "N/A"),
+                           tags=("empty_folder",))
+        
+        log_line(self.log_path, "===== VALIDATE ALL END =====")
+        
+        # Show summary
+        msg = "Validation Results:\n\n" + "\n".join(results)
+        messagebox.showinfo("Validate All", msg)
     
     # ==================== IMPORT SESSIONS ====================
     
