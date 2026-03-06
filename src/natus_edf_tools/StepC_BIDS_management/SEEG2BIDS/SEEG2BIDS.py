@@ -764,116 +764,235 @@ class EDFProcessor:
 
 
 
+    def _read_edf_header_simple(self, filepath):
+        """
+        Read EDF header without strict validation (compatible with prv_helpers approach).
+        Returns dict with meas_info and chan_info needed for annotation extraction.
+        """
+        meas_info = {}
+        chan_info = {}
+        
+        if filepath.lower().endswith(".edf"):
+            fid = open(filepath, "rb")
+        elif filepath.lower().endswith(".edfz") or filepath.lower().endswith(".edf.gz"):
+            fid = gzip.open(filepath, "rb")
+        else:
+            fid = open(filepath, "rb")
+        
+        try:
+            fid.seek(0)
+            meas_info['magic'] = fid.read(8).strip().decode()
+            fid.read(80)  # subject_id - skip
+            fid.read(80)  # recording_id - skip
+            
+            # Date/time
+            date_str = fid.read(8).decode()
+            time_str = fid.read(8).decode()
+            day, month, year = [int(x) for x in re.findall(r'(\d+)', date_str)]
+            hour, minute, second = [int(x) for x in re.findall(r'(\d+)', time_str)]
+            
+            # Handle Y2K: years < 85 are 2000s, >= 85 are 1900s
+            if year < 85:
+                year += 2000
+            else:
+                year += 1900
+            
+            meas_info['meas_date'] = datetime(year, month, day, hour, minute, second)
+            meas_info['millisecond'] = 0.0  # Will be updated if found in first TAL
+            
+            meas_info['data_offset'] = int(fid.read(8).decode())
+            
+            subtype = fid.read(44).strip().decode()[:5]
+            if subtype in ('24BIT', 'bdf'):
+                meas_info['data_size'] = 3
+            else:
+                meas_info['data_size'] = 2
+            
+            meas_info['n_records'] = int(fid.read(8).decode())
+            meas_info['record_length'] = float(fid.read(8).decode())
+            if meas_info['record_length'] == 0:
+                meas_info['record_length'] = 1.0
+            
+            meas_info['nchan'] = nchan = int(fid.read(4).decode())
+            
+            # Channel info
+            chan_info['ch_names'] = [fid.read(16).strip().decode() for _ in range(nchan)]
+            fid.read(80 * nchan)  # transducers - skip
+            fid.read(8 * nchan)   # units - skip
+            fid.read(8 * nchan)   # physical_min - skip
+            fid.read(8 * nchan)   # physical_max - skip
+            fid.read(8 * nchan)   # digital_min - skip
+            fid.read(8 * nchan)   # digital_max - skip
+            fid.read(80 * nchan)  # prefiltering - skip
+            chan_info['n_samps'] = [int(fid.read(8).decode()) for _ in range(nchan)]
+            
+        finally:
+            fid.close()
+        
+        return {'meas_info': meas_info, 'chan_info': chan_info}
+
+    def _read_all_annotations_regex(self, filepath, header, tal_indx):
+        """
+        Read all annotations from EDF file in a single pass (optimized).
+        Opens file once, reads all annotation blocks, then closes.
+        """
+        # Pre-compile regex for speed
+        pat = re.compile(r'([+-]\d+\.?\d*)(\x15(\d+\.?\d*))?(\x14.*?)\x14\x00')
+        all_annotations = []
+        
+        n_records = header['meas_info']['n_records']
+        data_offset = header['meas_info']['data_offset']
+        data_size = header['meas_info']['data_size']
+        n_samps = header['chan_info']['n_samps']
+        
+        # Pre-calculate constants
+        blocksize = sum(n_samps) * data_size
+        annot_offset_in_block = sum(n_samps[:tal_indx]) * data_size
+        annot_bytes = n_samps[tal_indx] * data_size
+        
+        # Progress indicator setup
+        progress_interval = max(1, n_records // 1000)
+        
+        if filepath.lower().endswith(".edf"):
+            fid = open(filepath, 'rb')
+        elif filepath.lower().endswith(".edfz") or filepath.lower().endswith(".edf.gz"):
+            fid = gzip.open(filepath, 'rb')
+        else:
+            fid = open(filepath, 'rb')
+        
+        try:
+            for block in range(n_records):
+                # Seek directly to annotation channel in this block
+                fid.seek(data_offset + (block * blocksize) + annot_offset_in_block)
+                
+                # Read only the annotation channel bytes
+                buf = fid.read(annot_bytes)
+                
+                raw = pat.findall(buf.decode('latin-1', errors='ignore'))
+                if raw:
+                    all_annotations.append([[*x, block] for x in raw])
+                
+                # Print progress
+                if (block + 1) % progress_interval == 0 or block == n_records - 1:
+                    pct = (((block + 1) / n_records) * 100)
+                    print(f"\rExtracting annotations: {pct:6.2f}% ({block + 1}/{n_records} records)", end="", flush=True)
+            
+            print()  # Newline after progress completes
+            
+        finally:
+            fid.close()
+        
+        return all_annotations
+
+    def _read_annotations_apply_offset(self, triggers):
+        """
+        Apply time offset to annotations (from prv_helpers).
+        The first TAL onset indicates fractional seconds offset from header start time.
+        """
+        events = []
+        offset = 0.0
+        
+        for k, ev in enumerate(triggers):
+            onset = float(ev[0]) + offset
+            duration = float(ev[2]) if ev[2] else 0.0
+            
+            for description in ev[3].split('\x14')[1:]:
+                if description:
+                    events.append([onset, duration, description, ev[4]])
+                elif k == 0:
+                    # First TAL with no description: this is the fractional offset
+                    offset = -onset
+        
+        return events if events else []
+
     def extract_annotations(self, filepath):
         """
-        Extract annotations from EDF+ file.
+        Extract annotations from EDF+ file using regex-based TAL parsing.
+        
+        This approach (from prv_helpers) reads annotation blocks directly without
+        strict timing validation, making it compatible with files that have minor
+        timing drift between data records.
 
         Filters out EDF+ "empty/housekeeping" TAL entries that often appear as:
-          - duration == -1
-          - description is empty or contains only non-printable control chars (e.g. '\\x14')
-          - repeated at record boundaries (many rows per second)
-
-        Supports two formats:
-          1) object-like: annot.onset, annot.duration, annot.description
-          2) tuple-like:  (onset_100ns, duration, text)
+          - duration == 0 or missing
+          - description is empty or contains only non-printable control chars
         """
         def _clean_desc(desc):
             if desc is None:
                 return ""
-            # Ensure string
             s = str(desc)
-            # Remove non-printable/control characters
             s = "".join(ch for ch in s if ch.isprintable())
-            # Collapse whitespace
             s = s.strip()
             return s
 
         try:
-            edf = EDFreader(filepath, read_annotations=True)
-
-            # Start datetime for absolute times
-            try:
-                start_dt = edf.getStartDateTime()
-            except Exception:
-                start_dt = None
-
-            # Best-effort ms offset (usually 0 in your current setup)
-            ms_offset = 0.0
-            try:
-                if hasattr(edf, "header") and isinstance(edf.header, dict):
-                    ms_offset = float(edf.header.get("meas_info", {}).get("millisecond", 0.0))
-            except Exception:
-                ms_offset = 0.0
-
+            # Read header using simple approach (no strict validation)
+            header = self._read_edf_header_simple(filepath)
+            
+            # Find annotation channel index
+            tal_indx = None
+            for i, name in enumerate(header['chan_info']['ch_names']):
+                if name.endswith('Annotations') or 'EDF Annotation' in name:
+                    tal_indx = i
+                    break
+            
+            if tal_indx is None:
+                # No annotation channel found - return empty list
+                return []
+            
+            # Read all annotation blocks in single pass (optimized)
+            raw_annotations = self._read_all_annotations_regex(filepath, header, tal_indx)
+            
+            # Flatten and apply offset
+            flat_annotations = [item for sublist in raw_annotations for item in sublist]
+            events = self._read_annotations_apply_offset(flat_annotations)
+            
+            # Get start datetime for absolute times
+            start_dt = header['meas_info']['meas_date']
+            ms_offset = header['meas_info'].get('millisecond', 0.0)
+            
+            # Process into final format
             annotations = []
-            ann_list = getattr(edf, "annotationslist", None)
-
-            # For optional de-duplication
             seen = set()
-
-            if ann_list:
-                for annot in ann_list:
-                    # --- Normalize to onset_100ns, duration, description ---
-                    if hasattr(annot, "onset"):
-                        onset_100ns = annot.onset
-                        duration = getattr(annot, "duration", None)
-                        description = getattr(annot, "description", "")
-                    else:
-                        onset_100ns = annot[0]
-                        duration = annot[1] if len(annot) > 1 else None
-                        description = annot[2] if len(annot) > 2 else ""
-
-                    onset_sec = float(onset_100ns) / 10000000.0
-                    desc_clean = _clean_desc(description)
-
-                    # --------- FILTER OUT EMPTY / HOUSEKEEPING ENTRIES ----------
-                    # Many EDF+ files contain "blank" annotations at record boundaries.
-                    # Typically duration == -1 and description is empty/non-printable.
-                    dur_val = duration
+            
+            for ev in events:
+                onset_sec = ev[0]
+                duration = ev[1]
+                description = ev[2]
+                
+                desc_clean = _clean_desc(description)
+                
+                if desc_clean == "":
+                    continue
+                
+                # Duration handling
+                if duration == 0 or duration is None:
+                    dur_display = "n/a"
+                else:
+                    dur_display = round(float(duration), 6)
+                
+                # De-dupe exact repeats
+                key = (round(onset_sec, 6), str(duration), desc_clean)
+                if key in seen:
+                    continue
+                seen.add(key)
+                
+                # Absolute time
+                time_abs = "n/a"
+                if start_dt is not None:
                     try:
-                        dur_val = float(duration)
-                    except Exception as e:
-                        raise(e)
-                        pass
-
-                    if desc_clean == "":
-                        # If it's blank, skip (this kills the '\x14' spam too after cleaning)
-                        continue
-
-                    # Optional: treat duration -1 as non-event if you want to be strict
-                    if dur_val == -1 or dur_val is None:
-                        dur_display = "n/a"
-                    else:
-                        try:
-                            dur_display = round(float(dur_val) / 10000000.0, 6)  # 100ns → seconds
-                        except Exception:
-                            dur_display = "n/a"
-
-
-                    # De-dupe exact repeats (same onset, duration, desc)
-                    key = (round(onset_sec, 6), str(dur_val), desc_clean)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-
-                    time_abs = "n/a"
-                    if start_dt is not None:
-                        try:
-                            time_abs = (start_dt + timedelta(seconds=onset_sec + ms_offset)).strftime("%H:%M:%S.%f")
-                        except Exception:
-                            time_abs = "n/a"
-                    
-                    if desc_clean != "":
-                        annotations.append({
-                            "onset": onset_sec,
-                            #"duration": duration if duration not in (None, "", 0) else "n/a",
-                            "duration": dur_display,
-                            "description": desc_clean,
-                            "time_abs": time_abs,
-                            "time_rel": sec2time(onset_sec, 6),
-                        })
-
-            edf.close()
+                        time_abs = (start_dt + timedelta(seconds=onset_sec + ms_offset)).strftime("%H:%M:%S.%f")
+                    except Exception:
+                        time_abs = "n/a"
+                
+                annotations.append({
+                    "onset": onset_sec,
+                    "duration": dur_display,
+                    "description": desc_clean,
+                    "time_abs": time_abs,
+                    "time_rel": sec2time(onset_sec, 6),
+                })
+            
             return annotations
 
         except Exception as e:

@@ -18,6 +18,7 @@ except Exception:
 # ---- EDF reader (user-provided) ----
 from common_libs.edflib_fork_mld.edfreader_mld2 import EDFreader
 
+EXCEPTION_DEBUG = True
 
 def iso_fmt_T(dt):
     """Return ISO-8601 string with 'T' separator."""
@@ -145,7 +146,9 @@ class BIDSShifterGUI:
         def keyfn(x):
             try:
                 return int(x.split("-")[1])
-            except Exception:
+            except Exception as e:
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 return 0
         ses.sort(key=keyfn)
         return ses
@@ -218,6 +221,8 @@ class BIDSShifterGUI:
             self.refresh_table()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load TSV:\n{e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
 
     def refresh_tsv(self):
         if not self.tsv_path:
@@ -237,7 +242,9 @@ class BIDSShifterGUI:
             seg = filename_value.split("/")[0]
             if seg.startswith("ses-") and len(seg) == 7 and seg[4:].isdigit():
                 return seg
-        except Exception:
+        except Exception as e:
+            if EXCEPTION_DEBUG:
+                raise(e)
             pass
         return ""
 
@@ -266,6 +273,9 @@ class BIDSShifterGUI:
                 try:
                     return int(f.split("-")[1])
                 except Exception:
+                    if EXCEPTION_DEBUG:
+                        raise(e)
+                    
                     return 0
             rows.sort(key=sess_key)
         for row in rows:
@@ -390,8 +400,10 @@ class BIDSShifterGUI:
             start = int(self.ent_start.get())
             end = int(self.ent_end.get())
             delta = int(self.ent_delta.get())
-        except Exception:
+        except Exception as e:
             messagebox.showerror("Error","Enter valid integers for start, end, and shift.")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
         if start > end:
             messagebox.showerror("Error","Start must be <= end.")
@@ -404,7 +416,9 @@ class BIDSShifterGUI:
                 continue
             try:
                 num = int(folder.split("-")[1])
-            except Exception:
+            except Exception as e:
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 continue
             if start <= num <= end:
                 new_num = num + delta
@@ -449,6 +463,8 @@ class BIDSShifterGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to backup TSV:\n{e}")
             log_line(self.log_path, f"ERROR backing up TSV: {e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         temp_prefix = "__tmp__"
@@ -499,6 +515,8 @@ class BIDSShifterGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Filesystem rename error:\n{e}")
             log_line(self.log_path, f"ERROR filesystem rename: {e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         try:
@@ -515,6 +533,8 @@ class BIDSShifterGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to write TSV:\n{e}")
             log_line(self.log_path, f"ERROR writing TSV: {e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         log_line(self.log_path, "===== APPLY END =====")
@@ -569,6 +589,8 @@ class BIDSShifterGUI:
             df = pd.read_csv(self.tsv_path, sep="\t")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to read TSV with pandas:\n{e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         if "acq_time" not in df.columns or "duration" not in df.columns or "filename" not in df.columns:
@@ -579,6 +601,8 @@ class BIDSShifterGUI:
             df["acq_time"] = pd.to_datetime(df["acq_time"])
         except Exception as e:
             messagebox.showerror("Error", f"Failed to parse acq_time as datetime:\n{e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         df["date"] = df["acq_time"].dt.date
@@ -586,6 +610,8 @@ class BIDSShifterGUI:
             df["duration"] = df["duration"].astype(float)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to parse duration as float (hours):\n{e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
             return
 
         filenames_by_date = df.groupby("date")["filename"].apply(list)
@@ -646,8 +672,11 @@ class BIDSShifterGUI:
         for iid in self.tree.get_children(""):
             acq = self.tree.set(iid, "Acq Time")
             try:
-                dtv = datetime.strptime(acq, "%Y-%m-%d %H:%M:%S").date()
-            except Exception:
+                dtv = datetime.strptime(acq, "%Y-%m-%dT%H:%M:%S").date()
+            except Exception as e:
+                print(f"qct is <{acq}>")
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 continue
             tags = list(self.tree.item(iid, "tags"))
             if dtv in day_status:
@@ -691,6 +720,8 @@ class BIDSShifterGUI:
                 # compare using 3 decimal places to match your generator
                 dur_key = f"{float(dur_s):.3f}"
             except Exception:
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 dur_key = dur_s.strip()  # fall back to raw string if not float
             key = (date_part, dur_key)
             groups[key].append(row)
@@ -718,6 +749,8 @@ class BIDSShifterGUI:
             try:
                 dur_disp_key = f"{float(dur_display):.3f}"
             except Exception:
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 dur_disp_key = dur_display.strip()
             if (date_disp, dur_disp_key) in dup_map:
                 # add duplicate tag
@@ -747,9 +780,9 @@ class BIDSShifterGUI:
         ses-005/ieeg/sub-167_ses-005_task-full_run-01_ieeg.edf\t2025-03-11T07:58:18\t22.727\tEDF+C
         ...
         """
-        if not EDF_AVAILABLE:
-            messagebox.showerror("Error","EDFreader not available. Ensure common_libs.edflib_fork_mld.edfreader_mld2.EDFreader is importable.")
-            return
+        #if not EDF_AVAILABLE:
+         #   messagebox.showerror("Error","EDFreader not available. Ensure common_libs.edflib_fork_mld.edfreader_mld2.EDFreader is importable.")
+          #  return
         if not self.root_dir:
             messagebox.showinfo("Info","Select a subject root first.")
             return
@@ -767,6 +800,8 @@ class BIDSShifterGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to backup existing TSV:\n{e}")
                 log_line(self.log_path, f"ERROR backing up existing TSV: {e}")
+                if EXCEPTION_DEBUG:
+                    raise(e)
                 return
 
         records = []
@@ -786,6 +821,8 @@ class BIDSShifterGUI:
                         # EXACT output format requirements:
                         records.append( (rel, acq_time, f"{dur_hours:.3f}", "EDF+C") )
                     except Exception as e:
+                        if EXCEPTION_DEBUG:
+                            raise(e)
                         log_line(self.log_path, f"ERROR reading EDF {full}: {e}")
 
         # Sort by acq_time text (ISO 8601 sortable)
@@ -803,6 +840,8 @@ class BIDSShifterGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to write TSV:\n{e}")
             log_line(self.log_path, f"ERROR writing generated TSV: {e}")
+            if EXCEPTION_DEBUG:
+                raise(e)
 
 
 # ---------- main ----------

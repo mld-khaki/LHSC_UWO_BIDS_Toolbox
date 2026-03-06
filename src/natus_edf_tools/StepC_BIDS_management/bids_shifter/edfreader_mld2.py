@@ -909,6 +909,14 @@ class EDFreader:
       def vprint(*args):
           if verbose:
               print("[EDFREADER][ANNOTS]", *args, flush=True)
+
+      def wprint(*args):
+          # Always print warnings (not gated by EDFREADER_VERBOSE).
+          print("[EDFREADER][ANNOTS][WARN]", *args, flush=True)
+
+      def eprint(*args):
+          # Always print soft/hard errors (not gated by EDFREADER_VERBOSE).
+          print("[EDFREADER][ANNOTS][ERROR]", *args, flush=True)
   
       # ------------------------------------------------------------------
       # Time-based status reporting (NO sleep)
@@ -937,6 +945,20 @@ class EDFreader:
       annots_in_tal = 0
       elapsedtime = 0
       time_tmp = 0
+      # ------------------------------------------------------------------
+      # Timekeeping step tolerance (continuous EDF+/BDF+):
+      #   |drift| <= 50 ms           -> tolerate + warning
+      #   50 ms < |drift| <= 250 ms  -> SOFT-FAIL (log) but continue
+      #   |drift| > 250 ms           -> HARD STOP (issue = 3)
+      # Units are 100 ns ticks (EDFLIB_TIME_DIMENSION ticks per second).
+      # ------------------------------------------------------------------
+      TK_WARN_TOL = int(round(0.050 * self.EDFLIB_TIME_DIMENSION))
+      TK_SOFTFAIL_TOL = int(round(0.250 * self.EDFLIB_TIME_DIMENSION))
+      _TICKS_PER_MS = (self.EDFLIB_TIME_DIMENSION / 1000.0)
+      MAX_TK_MSGS = 10
+      timekeeping_warn_cnt = 0
+      timekeeping_softfail_cnt = 0
+
       samplesize = 2
   
       data_record_duration = self.__long_data_record_duration
@@ -1037,8 +1059,42 @@ class EDFreader:
                                   if (time_tmp - elapsedtime) < data_record_duration:
                                       return 4
                               else:
-                                  if (time_tmp - elapsedtime) != data_record_duration:
-                                      return 3
+                                  actual_step = (time_tmp - elapsedtime)
+                                  expected_step = data_record_duration
+                                  if actual_step != expected_step:
+                                      drift = actual_step - expected_step
+                                      adrift = -drift if drift < 0 else drift
+                                      drift_ms = drift / _TICKS_PER_MS
+                                      if adrift <= TK_WARN_TOL:
+                                          timekeeping_warn_cnt += 1
+                                          if timekeeping_warn_cnt <= MAX_TK_MSGS:
+                                              wprint(
+                                                  f"Timekeeping drift {drift_ms:.3f} ms (<= 50 ms) tolerated",
+                                                  f"record={i}",
+                                                  f"expected_step={expected_step}",
+                                                  f"actual_step={actual_step}",
+                                              )
+                                          elif timekeeping_warn_cnt == (MAX_TK_MSGS + 1):
+                                              wprint("Further <=50ms timekeeping drift warnings suppressed...")
+                                      elif adrift <= TK_SOFTFAIL_TOL:
+                                          timekeeping_softfail_cnt += 1
+                                          if timekeeping_softfail_cnt <= MAX_TK_MSGS:
+                                              eprint(
+                                                  f"Timekeeping drift {drift_ms:.3f} ms (<= 250 ms) SOFT-FAIL, continuing",
+                                                  f"record={i}",
+                                                  f"expected_step={expected_step}",
+                                                  f"actual_step={actual_step}",
+                                              )
+                                          elif timekeeping_softfail_cnt == (MAX_TK_MSGS + 1):
+                                              eprint("Further <=250ms timekeeping SOFT-FAIL messages suppressed...")
+                                      else:
+                                          eprint(
+                                              f"Timekeeping drift {drift_ms:.3f} ms (> 250 ms) HARD STOP",
+                                              f"record={i}",
+                                              f"expected_step={expected_step}",
+                                              f"actual_step={actual_step}",
+                                          )
+                                          return 3
                           else:
                               if time_tmp < 0 or time_tmp >= self.EDFLIB_TIME_DIMENSION:
                                   return 2
@@ -1143,15 +1199,20 @@ class EDFreader:
                               annots_in_record += 1
                               
                               vprint(f"  Annotation #{self.__annots_in_file}: onset={onset_val}, dur={duration_val}, desc='{description}'")
-                          
-                          n = 0
-                          continue
+                      
+                      # Reset for next annotation field
+                      n = 0
+                      continue
   
+                  # Regular annotation text character
                   n += 1
-                  if n >= len(scratchpad) - 1:
-                      vprint("Scratchpad overflow guard triggered")
+                  if n >= (max_tal_ln - 1):
+                      vprint("ERROR: scratchpad overflow in TAL parsing")
                       return 5
   
+      if (timekeeping_warn_cnt != 0) or (timekeeping_softfail_cnt != 0):
+          wprint(f"Timekeeping summary: warn_cnt={timekeeping_warn_cnt}, softfail_cnt={timekeeping_softfail_cnt}")
+
       vprint("EXIT __get_annotations OK", f"annots_in_file={self.__annots_in_file}")
       return 0
 
@@ -2151,139 +2212,142 @@ class EDFreader:
 
     return 0
 
-  # check onset number
+  # check onset number (tolerant)
   def __is_onset_number(self, str_):
     """
     Returns 0 if valid onset number, 1 if invalid.
 
-    Accepts:
-      - bytes/bytearray
-      - list/tuple of ints (0..255)
-      - str (will be encoded as latin-1)
-
-    More tolerant than the original:
-      - allows missing leading '+'/'-' (assumes '+')
-      - trims leading/trailing whitespace and NUL
-      - requires at least one digit
-      - allows at most one '.'
+    Tolerates common real-world variants:
+      - optional leading '+'/'-' (missing sign is OK)
+      - leading dot ('.5', '+.5', '-.5')
+      - comma decimal separator ('12,34' -> '12.34')
+      - optional scientific notation ('1.2e-3', '-3E+2')
+      - ignores leading/trailing spaces
     """
-    # Normalize input to a list of ints (byte values)
-    if str_ is None:
+    # Determine actual string length up to NUL
+    l = self.__strlen(str_)
+    if l < 1:
       return 1
 
-    if isinstance(str_, str):
-      b = str_.encode('latin-1', errors='ignore')
-      data = list(b)
-    elif isinstance(str_, (bytes, bytearray)):
-      data = list(str_)
-    else:
-      # assume iterable of ints
-      try:
-        data = list(str_)
-      except Exception:
+    # Decode onset as ASCII-ish
+    try:
+      s = bytes(str_[:l]).decode("latin-1", errors="ignore")
+    except Exception:
+      return 1
+
+    s = s.strip()
+    if not s:
+      return 1
+
+    # normalize comma decimal
+    s = s.replace(",", ".")
+
+    # normalize leading dot cases: ".5", "+.5", "-.5"
+    if s[0] == ".":
+      s = "0" + s
+    elif len(s) >= 2 and (s[0] == "+" or s[0] == "-") and s[1] == ".":
+      s = s[0] + "0" + s[1:]
+
+    # Manual validation: [+|-] digits [.] digits [ (e|E) [+|-] digits ]
+    i = 0
+    if s[0] == "+" or s[0] == "-":
+      i = 1
+      if i >= len(s):
         return 1
 
-    # Cut at first NUL if present
-    try:
-      nul_idx = data.index(0)
-      data = data[:nul_idx]
-    except ValueError:
-      pass
-
-    # Trim whitespace (space, tab, CR, LF)
-    while len(data) and data[0] in (9, 10, 13, 32):
-      data.pop(0)
-    while len(data) and data[-1] in (9, 10, 13, 32):
-      data.pop()
-
-    if len(data) == 0:
-      return 1
-
-    # Optional sign: '+' or '-'
-    i = 0
-    if data[0] in (43, 45):
-      i = 1
-
-    # Must have at least one char after optional sign
-    if i >= len(data):
-      return 1
-
-    # Disallow leading '.' or trailing '.'
-    if data[i] == 46 or data[-1] == 46:
-      return 1
-
-    hasdot = 0
     hasdigit = 0
+    hasdot = 0
+    hasexp = 0
+    exp_hasdigit = 0
+    exp_sign_allowed = 0
 
-    for j in range(i, len(data)):
-      c = data[j]
+    for j in range(i, len(s)):
+      ch = s[j]
 
-      if c == 46:  # '.'
-        if hasdot:
-          return 1
-        hasdot = 1
+      if hasexp == 0:
+        # main mantissa part
+        if "0" <= ch <= "9":
+          hasdigit = 1
+          continue
+
+        if ch == ".":
+          if hasdot != 0:
+            return 1
+          hasdot = 1
+          continue
+
+        if ch == "e" or ch == "E":
+          # exponent requires at least one mantissa digit before it
+          if hasdigit == 0:
+            return 1
+          hasexp = 1
+          exp_hasdigit = 0
+          exp_sign_allowed = 1
+          continue
+
+        return 1
       else:
-        if c < 48 or c > 57:  # not '0'..'9'
-          return 1
-        hasdigit = 1
+        # exponent part
+        if exp_sign_allowed != 0 and (ch == "+" or ch == "-"):
+          exp_sign_allowed = 0
+          continue
 
-    if not hasdigit:
+        exp_sign_allowed = 0
+
+        if "0" <= ch <= "9":
+          exp_hasdigit = 1
+          continue
+
+        return 1
+
+    if hasdigit == 0:
+      return 1
+
+    if hasexp != 0 and exp_hasdigit == 0:
       return 1
 
     return 0
 
-# get long time
+  # get long time (tolerant, supports exponent)
   def __get_long_time(self, str_):
-    i = 0
-    l = 0
-    hasdot = 0
-    dotposition = 0
-    neg = 0
-    value = 0
-    radix = 0
+    """
+    Converts an onset string to "long time" units (100 ns units).
+    Returns int(round(seconds * EDFLIB_TIME_DIMENSION)).
 
+    Tolerates:
+      - missing sign
+      - leading dot
+      - comma decimal
+      - scientific notation
+      - surrounding spaces
+    """
     l = self.__strlen(str_)
     if l < 1:
       return 0
 
-    if str_[0] == 43:
-      i += 1
-    else:
-     if str_[0] == 45:
-        neg = 1
-        i += 1
+    try:
+      s = bytes(str_[:l]).decode("latin-1", errors="ignore")
+    except Exception:
+      return 0
 
-    for i in range(i, l):
-      if str_[i] == 46:
-        hasdot = 1
-        dotposition = i
-        break
+    s = s.strip()
+    if not s:
+      return 0
 
-    if hasdot != 0:
-      radix = self.EDFLIB_TIME_DIMENSION
+    s = s.replace(",", ".")
 
-      for i in range(dotposition - 1, 0, -1):
-        value += ((str_[i] - 48) * radix)
-        radix *= 10
+    if s[0] == ".":
+      s = "0" + s
+    elif len(s) >= 2 and (s[0] == "+" or s[0] == "-") and s[1] == ".":
+      s = s[0] + "0" + s[1:]
 
-      radix = self.EDFLIB_TIME_DIMENSION / 10
+    try:
+      seconds = float(s)
+    except Exception:
+      return 0
 
-      for i in range(dotposition + 1, l):
-        value += ((str_[i] - 48) * radix)
-        radix /= 10
-
-    else:
-      radix = self.EDFLIB_TIME_DIMENSION
-
-      for i in range(l - 1, 0, -1):
-        value += ((str_[i] - 48) * radix)
-        radix *= 10
-
-    if neg != 0:
-      return int(-value)
-
-    return int(value)
-
+    return int(round(seconds * self.EDFLIB_TIME_DIMENSION))
+    
 # get string length
   def __strlen(self, str_):
     l = len(str_)

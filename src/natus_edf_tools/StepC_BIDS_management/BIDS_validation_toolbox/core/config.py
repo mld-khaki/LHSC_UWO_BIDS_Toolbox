@@ -41,9 +41,24 @@ class ParticipantsConfig:
 
 
 @dataclass
+class MergeConfig:
+    path_a: str = ""
+    path_b: str = ""
+    subject_a: str = ""
+    subject_b: str = ""
+    destination: str = "A"  # A or B
+
+    # Behavior defaults for the merge UI
+    overwrite_on_duplicates: bool = False
+    default_select_duplicates: bool = False
+    default_select_empty: bool = False
+
+
+@dataclass
 class AppConfig:
     general: GeneralConfig
     participants: ParticipantsConfig
+    merge: MergeConfig
     config_path: str = DEFAULT_CONFIG_PATH
 
     @staticmethod
@@ -76,6 +91,8 @@ class AppConfig:
             cfg["general"] = {}
         if "participants" not in cfg:
             cfg["participants"] = {}
+        if "merge" not in cfg:
+            cfg["merge"] = {}
 
         general = GeneralConfig(
             source_bids_dir=cls._str_get(cfg, "general", "source_bids_dir", ""),
@@ -96,7 +113,21 @@ class AppConfig:
             overwrite_in_augmented=cls._bool_get(cfg, "participants", "overwrite_in_augmented", False),
         )
 
-        app_cfg = cls(general=general, participants=participants, config_path=config_path)
+        merge = MergeConfig(
+            path_a=cls._str_get(cfg, "merge", "path_a", ""),
+            path_b=cls._str_get(cfg, "merge", "path_b", ""),
+            subject_a=cls._str_get(cfg, "merge", "subject_a", ""),
+            subject_b=cls._str_get(cfg, "merge", "subject_b", ""),
+            destination=(cls._str_get(cfg, "merge", "destination", "A") or "A").strip().upper()[:1] or "A",
+            overwrite_on_duplicates=cls._bool_get(cfg, "merge", "overwrite_on_duplicates", False),
+            default_select_duplicates=cls._bool_get(cfg, "merge", "default_select_duplicates", False),
+            default_select_empty=cls._bool_get(cfg, "merge", "default_select_empty", False),
+        )
+
+        if merge.destination not in ("A", "B"):
+            merge.destination = "A"
+
+        app_cfg = cls(general=general, participants=participants, merge=merge, config_path=config_path)
 
         # Always write a complete config.ini (create if missing, fill defaults if incomplete)
         app_cfg.save()
@@ -127,6 +158,17 @@ class AppConfig:
             "include_only_bids_subjects": "true" if self.participants.include_only_bids_subjects else "false",
             "duplicate_policy": (self.participants.duplicate_policy or "last").strip(),
             "overwrite_in_augmented": "true" if self.participants.overwrite_in_augmented else "false",
+        }
+
+        cfg["merge"] = {
+            "path_a": (self.merge.path_a or "").strip(),
+            "path_b": (self.merge.path_b or "").strip(),
+            "subject_a": (self.merge.subject_a or "").strip(),
+            "subject_b": (self.merge.subject_b or "").strip(),
+            "destination": (self.merge.destination or "A").strip().upper()[:1] or "A",
+            "overwrite_on_duplicates": "true" if self.merge.overwrite_on_duplicates else "false",
+            "default_select_duplicates": "true" if self.merge.default_select_duplicates else "false",
+            "default_select_empty": "true" if self.merge.default_select_empty else "false",
         }
 
         os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
