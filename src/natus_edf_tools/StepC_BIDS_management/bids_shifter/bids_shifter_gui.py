@@ -11,6 +11,17 @@ A graphical tool for managing BIDS session data:
 - Sync files to folder session numbers
 - Find and delete empty folders
 - Validate all checks at once
+- DELETE SESSION with confirmation
+
+ENHANCEMENTS v2.2:
+- Validate all checks at once
+- DELETE SESSION with confirmation
+- NEW: Lock checking before rename/move/delete operations
+- NEW: Delete Session button with full confirmation
+- IMPROVED: Duplicate finder now checks all associated files (not just EDF)
+- IMPROVED: Shows full match vs partial match status for duplicates
+
+
 
 Modular version with bug fixes:
 - Fixed: Duplicate finder now correctly shows session numbers
@@ -23,8 +34,8 @@ Modular version with bug fixes:
 - New: Undo functionality
 - New: Auto-check discrepancies on load
 
-Author: Based on original by Nasim
-Version: 2.1.0 (Enhanced)
+Author: Based on original by Milad Khaki
+Version: 2.2.0 (Enhanced with Lock Checking & Delete Session)
 """
 
 import os
@@ -42,7 +53,7 @@ except ImportError:
     PANDAS_AVAILABLE = False
 
 # Import our modules
-from modules import (
+from  .modules import (
     EXCEPTION_DEBUG,
     TREE_TAGS,
     COLOR_LEGEND,
@@ -64,15 +75,23 @@ from modules import (
     is_edfreader_available,
     generate_tsv_records,
 )
-from modules.config import TREE_COLUMNS, COLUMN_WIDTH_RATIOS
-from modules.edf_utils import get_edfreader_error
+from .modules.config import TREE_COLUMNS, COLUMN_WIDTH_RATIOS
+from .modules.edf_utils import get_edfreader_error, generate_session_tsvs_from_subject_tsv
+
+# Import new lock checker
+try:
+    from .modules.file_lock_checker import FileLockChecker, check_before_operation
+    LOCK_CHECKER_AVAILABLE = True
+except ImportError:
+    LOCK_CHECKER_AVAILABLE = False
+
 
 class BIDSShifterGUI:
     """Main GUI application for BIDS session management."""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("BIDS Session Shifter & TSV Tools v2.1")
+        self.root.title("BIDS Session Shifter & TSV Tools v2.2")
         self.root.geometry("1400x900")
         
         # Core state
@@ -85,10 +104,12 @@ class BIDSShifterGUI:
         self.folder_manager = None  # Created when root selected
         self.duplicate_finder = DuplicateFinder()
         self.import_manager = ImportManager()
+        self.lock_checker = None  # Created when root selected
         
         # UI state
         self.dry_run = tk.BooleanVar(value=True)
         self.sort_sessions = tk.BooleanVar(value=False)
+        self.check_locks = tk.BooleanVar(value=True)  # NEW: Lock check toggle
         
         # Undo state - stores snapshots before operations
         self.undo_stack = []
@@ -161,10 +182,17 @@ class BIDSShifterGUI:
                   command=self.import_sessions_dialog,
                   bg="#d4edda").pack(side="left", padx=2)
         
+        # NEW: Delete Session button
+        tk.Button(left, text="Delete Session", 
+                  command=self.delete_session_dialog,
+                  bg="#f8d7da").pack(side="left", padx=2)
+        
         # Right side checkboxes
         right = tk.Frame(toolbar)
         right.pack(side="right")
         
+        tk.Checkbutton(right, text="Check Locks", 
+                       variable=self.check_locks).pack(side="right", padx=4)
         tk.Checkbutton(right, text="Dry Run", 
                        variable=self.dry_run).pack(side="right", padx=4)
         tk.Checkbutton(right, text="Sort by Session #", 
@@ -232,6 +260,24 @@ class BIDSShifterGUI:
         
         # Auto-resize on window resize
         self.tree.bind("<Configure>", self._auto_resize_columns)
+    
+        # Right-click context menu
+        self.tree.bind("<Button-3>", self._show_context_menu)
+    
+    def _show_context_menu(self, event):
+        """Show context menu on right-click."""
+        # Select the item under cursor
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            
+            menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Delete Session...", command=self.delete_session_dialog)
+            menu.add_separator()
+            menu.add_command(label="Increment (+1)", command=self.move_session_down)
+            menu.add_command(label="Decrement (-1)", command=self.move_session_up)
+            
+            menu.tk_popup(event.x_root, event.y_root)
     
     def _build_legend(self):
         """Build the color legend at the bottom."""
@@ -337,6 +383,10 @@ class BIDSShifterGUI:
         self.import_manager.log_path = self.log_path
         self.folder_manager = FolderManager(self.root_dir, self.log_path)
         
+        # Initialize lock checker if available
+        if LOCK_CHECKER_AVAILABLE:
+            self.lock_checker = FileLockChecker(self.log_path)
+        
         # Try to load default TSV
         base = os.path.basename(os.path.normpath(self.root_dir))
         default_tsv = os.path.join(self.root_dir, f"{base}_scans.tsv")
@@ -367,11 +417,11 @@ class BIDSShifterGUI:
             
             # Show non-blocking notification in status/title
             count = len(discrepancies)
-            self.root.title(f"BIDS Shifter v2.1 - ⚠️ {count} discrepancies found")
+            self.root.title(f"BIDS Shifter v2.2 - ⚠️ {count} discrepancies found")
             log_line(self.log_path, f"Auto-check: {count} folder/filename discrepancies found")
         else:
             self.current_discrepancies = set()
-            self.root.title("BIDS Session Shifter & TSV Tools v2.1")
+            self.root.title("BIDS Session Shifter & TSV Tools v2.2")
     
     def load_tsv_dialog(self):
         """Show dialog to select TSV file."""
@@ -477,6 +527,43 @@ class BIDSShifterGUI:
             return None
         return self.tree.set(sel[0], "Folder") or None
     
+    # ==================== LOCK CHECKING ====================
+    
+    def _check_locks_for_sessions(self, sessions):
+        """
+        Check if sessions have any locked files.
+        
+        Args:
+            sessions: List of session names or dict with mappings
+        
+        Returns:
+            Tuple of (can_proceed: bool, error_message: str or None)
+        """
+        if not self.check_locks.get():
+            return True, None
+        
+        if not LOCK_CHECKER_AVAILABLE:
+            log_line(self.log_path, "Warning: Lock checker not available")
+            return True, None
+        
+        if not self.lock_checker:
+            self.lock_checker = FileLockChecker(self.log_path)
+        
+        # Handle both list and dict inputs
+        if isinstance(sessions, dict):
+            session_list = list(sessions.keys())
+        else:
+            session_list = list(sessions)
+        
+        result = self.lock_checker.check_sessions_for_operation(
+            self.root_dir, session_list
+        )
+        
+        if result.has_locks:
+            return False, result.format_summary()
+        
+        return True, None
+    
     # ==================== SESSION OPERATIONS ====================
     
     def shift_range(self):
@@ -578,6 +665,107 @@ class BIDSShifterGUI:
         self.refresh_table()
         messagebox.showinfo("Done", "Sessions renumbered in preview. Use 'Apply Changes' to save.")
     
+    # ==================== DELETE SESSION ====================
+    
+    def delete_session_dialog(self):
+        """Show dialog to delete a session with full confirmation."""
+        if not self.root_dir or not self.folder_manager:
+            messagebox.showinfo("Info", "Select a subject root first.")
+            return
+        
+        # Get selected session or ask user
+        session = self._get_selected_session()
+        
+        if not session:
+            # Show list of available sessions
+            sessions = sorted(self.folder_manager.get_session_folders(), 
+                            key=extract_session_number)
+            if not sessions:
+                messagebox.showinfo("Info", "No sessions found in folder.")
+                return
+            
+            session = simpledialog.askstring(
+                "Delete Session",
+                f"Available sessions: {', '.join(sessions)}\n\nEnter session to delete (e.g., ses-001):"
+            )
+            
+            if not session:
+                return
+            
+            # Normalize format
+            if not session.startswith("ses-"):
+                session = f"ses-{session}"
+            if len(session) == 6:  # ses-1 -> ses-001
+                session = f"ses-{int(session[4:]):03d}"
+        
+        # Get session info
+        info = self.folder_manager.get_session_info(session)
+        
+        if not info:
+            messagebox.showerror("Error", f"Session not found: {session}")
+            return
+        
+        # Build confirmation message
+        msg = f"⚠️ DELETE SESSION: {session}\n\n"
+        msg += f"This will PERMANENTLY delete:\n"
+        msg += f"  • {info['edf_count']} EDF files\n"
+        msg += f"  • {info['json_count']} JSON files\n"
+        msg += f"  • {info['tsv_count']} TSV files\n"
+        msg += f"  • {info['other_count']} other files\n"
+        msg += f"  • Total: {info['total_files']} files ({info['total_size_mb']:.2f} MB)\n\n"
+        msg += f"Folder: {info['path']}\n\n"
+        msg += "This action CANNOT be undone!\n\n"
+        msg += "Are you sure you want to proceed?"
+        
+        if not messagebox.askyesno("Confirm Delete", msg, icon="warning"):
+            return
+        
+        # Second confirmation
+        confirm_text = simpledialog.askstring(
+            "Final Confirmation",
+            f"Type '{session}' to confirm deletion:"
+        )
+        
+        if confirm_text != session:
+            messagebox.showinfo("Cancelled", "Deletion cancelled - confirmation text did not match.")
+            return
+        
+        # Check for locks if enabled
+        if self.check_locks.get():
+            can_proceed, error_msg = self._check_locks_for_sessions([session])
+            if not can_proceed:
+                messagebox.showerror("Cannot Delete", 
+                    f"Some files are locked and cannot be deleted:\n\n{error_msg}\n\n"
+                    "Close any applications that might have these files open and try again.")
+                return
+        
+        # Perform deletion
+        log_line(self.log_path, f"===== DELETE SESSION: {session} =====")
+        
+        success, error = self.folder_manager.delete_session(session, check_locks=False)
+        
+        if success:
+            # Also remove from TSV
+            self._save_undo_state(f"Delete session {session} (TSV only - folder already deleted)")
+            removed = self.session_manager.delete_session_from_rows(
+                self.tsv_manager.rows, session
+            )
+            
+            # Save TSV if not dry run
+            if not self.dry_run.get():
+                self.tsv_manager.save()
+                self.tsv_manager.commit_changes()
+            
+            self.refresh_table()
+            
+            log_line(self.log_path, f"Successfully deleted session {session}")
+            messagebox.showinfo("Deleted", 
+                f"Session {session} deleted successfully.\n\n"
+                f"Removed {removed} rows from TSV.")
+        else:
+            log_line(self.log_path, f"Failed to delete session {session}: {error}")
+            messagebox.showerror("Error", f"Failed to delete session:\n\n{error}")
+    
     # ==================== APPLY CHANGES ====================
     
     def apply_changes(self):
@@ -591,6 +779,15 @@ class BIDSShifterGUI:
         if not old_to_new:
             messagebox.showinfo("Info", "No changes to apply.")
             return
+        
+        # Check for locks before proceeding
+        if self.check_locks.get() and not self.dry_run.get():
+            can_proceed, error_msg = self._check_locks_for_sessions(old_to_new)
+            if not can_proceed:
+                messagebox.showerror("Cannot Apply", 
+                    f"Some files are locked and cannot be renamed:\n\n{error_msg}\n\n"
+                    "Close any applications that might have these files open and try again.")
+                return
         
         # Show preview
         preview = "\n".join([f"{k} -> {v}" for k, v in 
@@ -608,9 +805,13 @@ class BIDSShifterGUI:
             messagebox.showerror("Error", "Failed to create TSV backup.")
             return
         
-        # Rename folders
+        # Rename folders (lock checking is done inside if enabled)
         if self.folder_manager:
-            success = self.folder_manager.rename_folders(old_to_new, self.dry_run.get())
+            success = self.folder_manager.rename_folders(
+                old_to_new, 
+                self.dry_run.get(),
+                check_locks=False  # Already checked above
+            )
             if not success:
                 messagebox.showerror("Error", "Folder rename failed. Check log.")
                 return
@@ -755,13 +956,16 @@ class BIDSShifterGUI:
         messagebox.showinfo("Duration Check", "Complete. See colors and log.")
     
     def find_duplicates(self):
-        """Find duplicate recordings by (date, duration)."""
+        """Find duplicate recordings by (date, duration) - ENHANCED version."""
         if not self.tsv_manager.rows:
             messagebox.showinfo("Info", "Load a TSV first.")
             return
         
-        # Find duplicates
-        duplicates = self.duplicate_finder.find_duplicates(self.tsv_manager.rows)
+        # Find duplicates with associated file scanning
+        duplicates = self.duplicate_finder.find_duplicates(
+            self.tsv_manager.rows,
+            root_dir=self.root_dir  # Pass root_dir to scan for associated files
+        )
         
         # Refresh and tag
         self.refresh_table()
@@ -783,7 +987,7 @@ class BIDSShifterGUI:
                 self.tree.item(iid, tags=tuple(tags))
                 tagged += 1
         
-        # Show summary (with bug fix - now shows session numbers prominently)
+        # Show summary (ENHANCED - now shows session numbers and sidecar match status)
         summary = self.duplicate_finder.format_duplicate_summary(duplicates)
         
         # Log details
@@ -947,11 +1151,16 @@ class BIDSShifterGUI:
         else:
             results.append("✓ No empty folders")
         
-        # 4. Check duplicates
-        duplicates = self.duplicate_finder.find_duplicates(self.tsv_manager.rows)
+        # 4. Check duplicates (ENHANCED)
+        duplicates = self.duplicate_finder.find_duplicates(
+            self.tsv_manager.rows,
+            root_dir=self.root_dir
+        )
         if duplicates:
-            total_dup = sum(len(v) for v in duplicates.values())
+            total_dup = sum(len(g.infos) for g in duplicates.values())
+            full_matches = sum(1 for g in duplicates.values() if g.is_full_match is True)
             results.append(f"⚠️ Duplicate recordings: {len(duplicates)} groups ({total_dup} files)")
+            results.append(f"   Full matches: {full_matches}, Partial: {len(duplicates) - full_matches}")
         else:
             results.append("✓ No duplicate recordings")
         
@@ -1015,6 +1224,18 @@ class BIDSShifterGUI:
             messagebox.showinfo("Info", f"No sessions found in:\n{source}")
             return
         
+        # Check for locks in source if enabled
+        if self.check_locks.get() and not self.dry_run.get():
+            if LOCK_CHECKER_AVAILABLE:
+                checker = FileLockChecker(self.log_path)
+                result = checker.check_import_source(source, scan["sessions"])
+                
+                if result.has_locks:
+                    messagebox.showerror("Cannot Import", 
+                        f"Some source files are locked:\n\n{result.format_summary()}\n\n"
+                        "Close any applications that might have these files open and try again.")
+                    return
+        
         # Show what was found
         msg = f"Found in source:\n"
         msg += f"  Sessions: {', '.join(scan['sessions'])}\n"
@@ -1076,23 +1297,29 @@ class BIDSShifterGUI:
     # ==================== GENERATE TSV ====================
     
     def generate_tsv_from_edfs(self):
-        """Generate TSV from EDF files in root directory."""
+        """Generate subject-level TSV from EDF files and per-session TSVs from zipped archives."""
         if not self.root_dir:
             messagebox.showinfo("Info", "Select a subject root first.")
             return
-        
+
+        # EDFreader is required only for plain EDF files.
+        # Zipped archives are handled via session-level TSVs so we warn but do not block.
         if not is_edfreader_available():
             err_msg = get_edfreader_error() or "Unknown import error"
-            messagebox.showerror("Error", 
-                f"EDFreader not available.\n\n"
-                f"Make sure edfreader_mld2.py is in the same folder as bids_shifter_gui.py\n\n"
-                f"Details:\n{err_msg}")
-            return
-        
+            proceed = messagebox.askyesno(
+                "EDFreader unavailable",
+                f"EDFreader could not be loaded -- plain EDF metadata will not be read.\n\n"
+                f"Details:\n{err_msg}\n\n"
+                f"Continue anyway? (Zipped EDF archives will still be processed "
+                f"if a subject-level TSV already exists.)"
+            )
+            if not proceed:
+                return
+
         base = os.path.basename(os.path.normpath(self.root_dir))
         out_path = os.path.join(self.root_dir, f"{base}_scans.tsv")
-        
-        # Backup if exists
+
+        # Backup existing subject TSV before overwriting
         if os.path.exists(out_path):
             ts = get_timestamp_suffix()
             backup = os.path.join(self.root_dir, f"{base}_scans_backup_{ts}.tsv")
@@ -1102,34 +1329,109 @@ class BIDSShifterGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Backup failed:\n{e}")
                 return
-        
-        # Generate records
-        records = generate_tsv_records(self.root_dir, self.log_path)
-        
+
+        # ------------------------------------------------------------------
+        # Step 1: scan EDF files and get records.
+        # We do NOT pass subject_tsv_path here because we are about to
+        # overwrite/create it -- session TSVs are generated in Step 3.
+        # ------------------------------------------------------------------
+        #records, scan_errors = generate_tsv_records(self.root_dir, self.log_path)
+        source_tsv_for_archives = None
+
+        if self.tsv_manager.tsv_path and os.path.exists(self.tsv_manager.tsv_path):
+            source_tsv_for_archives = self.tsv_manager.tsv_path
+        elif os.path.exists(out_path):
+            source_tsv_for_archives = out_path
+
+        records, scan_errors = generate_tsv_records(
+            self.root_dir,
+            self.log_path,
+            subject_tsv_path=source_tsv_for_archives,
+        )
+
+        if scan_errors:
+            messagebox.showerror(
+                "Session TSV mismatch",
+                "Existing session TSV(s) do not match the subject TSV.\n\n"
+                + "\n".join(scan_errors)
+                + "\n\nPlease resolve these discrepancies before regenerating."
+            )
+            return
+
         if not records:
             messagebox.showinfo("Info", "No EDF files found.")
             return
-        
-        # Write TSV
+
+        # ------------------------------------------------------------------
+        # Step 2: write the subject-level TSV.
+        # Use DictWriter so each field lands in the correct column.
+        # Internal fields (metadata_source, _imported, etc.) are excluded
+        # via extrasaction="ignore".
+        # Records without metadata (manual_required) are included with
+        # empty acq_time/duration so the file is a complete inventory.
+        # ------------------------------------------------------------------
         try:
-            import csv
+            import csv as _csv
             with open(out_path, "w", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f, delimiter="\t", lineterminator="\n")
-                writer.writerow(DEFAULT_TSV_COLUMNS)
+                writer = _csv.DictWriter(
+                    f,
+                    fieldnames=DEFAULT_TSV_COLUMNS,
+                    delimiter="\t",
+                    lineterminator="\n",
+                    extrasaction="ignore",
+                )
+                writer.writeheader()
                 for rec in records:
-                    writer.writerow(list(rec))
-            
-            log_line(self.log_path, f"Generated TSV: {out_path}")
-            messagebox.showinfo("Generate TSV", f"Created:\n{out_path}\n\n{len(records)} records.")
-            
-            # Reload
-            self.tsv_manager.load(out_path)
-            self.refresh_table()
-            
+                    writer.writerow(rec)
+            log_line(self.log_path, f"Generated subject TSV: {out_path} ({len(records)} records)")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to write TSV:\n{e}")
+            messagebox.showerror("Error", f"Failed to write subject TSV:\n{e}")
             if EXCEPTION_DEBUG:
                 raise e
+            return
+
+        # ------------------------------------------------------------------
+        # Step 3: generate per-session TSVs for sessions that contain
+        # zipped EDFs and do not yet have a session-level scans file.
+        # This uses the subject TSV we just wrote as the data source.
+        # ------------------------------------------------------------------
+        ses_ok, ses_generated, ses_errors = generate_session_tsvs_from_subject_tsv(
+            self.root_dir, out_path, self.log_path
+        )
+
+        if ses_errors:
+            messagebox.showerror(
+                "Session TSV mismatch",
+                "One or more session TSVs already exist but do not match the "
+                "newly written subject TSV:\n\n"
+                + "\n".join(ses_errors)
+                + "\n\nThe subject TSV was saved. Resolve session TSV mismatches manually."
+            )
+            # Do not return -- subject TSV was written successfully; just warn.
+
+        # ------------------------------------------------------------------
+        # Step 4: report and reload
+        # ------------------------------------------------------------------
+        n_manual = sum(1 for r in records if r.get("metadata_source") == "manual_required")
+        summary_lines = [
+            f"Subject TSV: {out_path}",
+            f"Total records: {len(records)}",
+        ]
+        if n_manual:
+            summary_lines.append(
+                f"  ({n_manual} archive(s) need manual metadata -- acq_time/duration left blank)"
+            )
+        if ses_generated:
+            summary_lines.append(f"\nSession TSVs generated ({len(ses_generated)}):")
+            for p in ses_generated:
+                summary_lines.append(f"  {os.path.relpath(p, self.root_dir)}")
+        elif not ses_errors:
+            summary_lines.append("\nNo new session TSVs needed.")
+
+        messagebox.showinfo("Generate TSV", "\n".join(summary_lines))
+
+        self.tsv_manager.load(out_path)
+        self.refresh_table()
 
 
 # ==================== MAIN ====================

@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 from .config import SESSION_PATTERN, SESSION_FOLDER_PATTERN, EXCEPTION_DEBUG
-from .utils import extract_session_from_filename, extract_session_number, log_line
+from .utils import extract_session_from_filename, extract_session_number, log_line, is_zipped_edf
 
 
 class ImportManager:
@@ -42,9 +42,12 @@ class ImportManager:
             item_path = os.path.join(source_root, item)
             if SESSION_FOLDER_PATTERN.match(item) and os.path.isdir(item_path):
                 sessions.append(item)
-                # Count EDFs in this session
+                # Count EDFs (plain and archived) in this session
                 for root, dirs, files in os.walk(item_path):
-                    edf_count += sum(1 for f in files if f.lower().endswith(".edf"))
+                    edf_count += sum(
+                        1 for f in files
+                        if f.lower().endswith(".edf") or is_zipped_edf(f)
+                    )
         
         # Find TSV
         base = os.path.basename(os.path.normpath(source_root))
@@ -229,7 +232,10 @@ class ImportManager:
         
         for root, dirs, files in os.walk(session_path):
             for fn in files:
-                if not fn.lower().endswith(".edf"):
+                is_plain_edf = fn.lower().endswith(".edf") and not is_zipped_edf(fn)
+                is_archive = is_zipped_edf(fn)
+
+                if not is_plain_edf and not is_archive:
                     continue
                 
                 full_path = os.path.join(root, fn)
@@ -257,7 +263,7 @@ class ImportManager:
                 duration = ""
                 edf_type = "EDF+C"
                 
-                if edf_available:
+                if is_plain_edf and edf_available:
                     try:
                         reader = EDFreader(full_path, read_annotations=False)
                         start_dt = reader.getStartDateTime()
@@ -270,12 +276,32 @@ class ImportManager:
                     except Exception as e:
                         log_line(self.log_path, f"WARNING: Could not read EDF metadata: {fn}")
                 
+                elif is_archive:
+                    # Look up the session-level TSV for zipped EDF metadata
+                    from .edf_utils import find_session_tsv, read_metadata_from_session_tsv
+
+                    rel_path_in_subject = os.path.relpath(full_path, session_root).replace("\\", "/")
+                    ses_tsv = find_session_tsv(session_path)
+                    if ses_tsv:
+                        row = read_metadata_from_session_tsv(ses_tsv, rel_path_in_subject)
+                        if row:
+                            acq_time = row.get("acq_time", "")
+                            duration = row.get("duration", "")
+                            edf_type = row.get("edf_type", "EDF+C")
+                        else:
+                            log_line(self.log_path,
+                                     f"WARNING: No matching row in session TSV for: {fn}")
+                    else:
+                        log_line(self.log_path,
+                                 f"WARNING: No session TSV found - manual metadata required for: {fn}")
+                
                 rows.append({
                     "filename": tsv_filename,
                     "acq_time": acq_time,
                     "duration": duration,
                     "edf_type": edf_type,
-                    "_imported": is_imported  # Internal flag for highlighting
+                    "_imported": is_imported,
+                    "_needs_manual": is_archive and not acq_time,
                 })
         
         return rows

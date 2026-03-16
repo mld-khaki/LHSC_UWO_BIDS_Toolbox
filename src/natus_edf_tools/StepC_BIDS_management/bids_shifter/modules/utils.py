@@ -139,26 +139,50 @@ def get_timestamp_suffix():
     return datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
 
 
+def is_zipped_edf(filename):
+    """
+    Check if a filename is a zipped EDF archive.
+
+    Accepted compound extensions: .edf.zip, .edf.rar, .edf.7z, .edf.gz
+    The inner filename must contain '.edf' immediately before the archive
+    suffix — bare .zip/.gz files are not matched.
+
+    Args:
+        filename: Filename (basename or full path) to check
+
+    Returns:
+        True if the file is a recognised EDF archive
+    """
+    if not filename:
+        return False
+    from .config import EDF_ARCHIVE_EXTENSIONS
+    lower = os.path.basename(filename).lower()
+    return any(lower.endswith(ext) for ext in EDF_ARCHIVE_EXTENSIONS)
+
+
 def is_bids_file(filename):
     """
     Check if a file follows BIDS naming conventions and contains session info.
-    
+
+    Handles both simple extensions (.edf, .tsv, …) and compound EDF archive
+    extensions (.edf.zip, .edf.rar, .edf.7z, .edf.gz).
+
     Args:
         filename: Filename to check
-    
+
     Returns:
         True if file is a BIDS file with session info
     """
     if not filename:
         return False
-    
+
     lower = filename.lower()
-    
-    # Check extension
+
+    # Check extension — endswith() works correctly for compound extensions too
     has_bids_ext = any(lower.endswith(ext) for ext in BIDS_FILE_EXTENSIONS)
     if not has_bids_ext:
         return False
-    
+
     # Check for session pattern in filename
     return SESSION_PATTERN.search(filename) is not None
 

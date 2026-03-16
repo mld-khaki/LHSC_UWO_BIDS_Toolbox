@@ -12,8 +12,15 @@ EXCEPTION_DEBUG = False
 SESSION_PATTERN = re.compile(r"ses-(\d{3})")
 SESSION_FOLDER_PATTERN = re.compile(r"^ses-\d{3}$")
 
+# Accepted EDF archive extensions (compound: inner file must end in .edf)
+EDF_ARCHIVE_EXTENSIONS = {".edf.zip", ".edf.rar", ".edf.7z", ".edf.gz"}
+
 # BIDS file extensions that contain session info in filename
-BIDS_FILE_EXTENSIONS = {".edf", ".tsv", ".json", ".vhdr", ".vmrk", ".eeg", ".nii", ".nii.gz"}
+# Includes plain EDF archives so they are recognised during rename/move operations
+BIDS_FILE_EXTENSIONS = {
+    ".edf", ".tsv", ".json", ".vhdr", ".vmrk", ".eeg", ".nii", ".nii.gz",
+    ".edf.zip", ".edf.rar", ".edf.7z", ".edf.gz",
+}
 
 # Default TSV columns
 DEFAULT_TSV_COLUMNS = ["filename", "acq_time", "duration", "edf_type"]

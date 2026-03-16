@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Session manipulation for BIDS Shifter GUI.
-Handles shifting, swapping, and normalizing session numbers.
+Handles shifting, swapping, normalizing, and deleting session numbers.
+
+ENHANCEMENT: Added delete_session functionality with safety checks.
+ENHANCEMENT: Integrated file lock checking before operations.
 """
 
 import os
@@ -270,6 +273,32 @@ class SessionManager:
         
         return discrepancies
 
+    def delete_session_from_rows(self, rows, session):
+        """
+        Remove all rows belonging to a session from the rows list.
+        
+        Args:
+            rows: List of TSV row dicts (modified in place)
+            session: Session string to delete (e.g., "ses-001")
+        
+        Returns:
+            Number of rows removed
+        """
+        if not session:
+            return 0
+        
+        original_count = len(rows)
+        
+        # Filter out rows with this session
+        rows[:] = [
+            row for row in rows 
+            if extract_session_from_filename(row.get("filename", "")) != session
+        ]
+        
+        removed = original_count - len(rows)
+        log_line(self.log_path, f"Removed {removed} rows for session {session}")
+        return removed
+
 
 class FolderManager:
     """Manages filesystem operations for session folders."""
@@ -301,7 +330,7 @@ class FolderManager:
     
     def find_empty_folders(self):
         """
-        Find session folders that contain no EDF or TSV files.
+        Find session folders that contain no EDF or TSV files, or Archives.
         
         Returns:
             List of (folder_name, file_count) tuples for empty folders
@@ -325,6 +354,7 @@ class FolderManager:
             # Count files by type
             edf_count = 0
             tsv_count = 0
+            arx_count = 0
             other_count = 0
             
             for root, dirs, files in os.walk(folder_path):
@@ -334,15 +364,72 @@ class FolderManager:
                         edf_count += 1
                     elif lower.endswith(".tsv"):
                         tsv_count += 1
+                    elif lower.endswith(".edf.zip") or lower.endswith(".edf.7z") or lower.endswith(".edf.rar") or lower.endswith(".edf.gz"):
+                        arx_count += 1
                     else:
                         other_count += 1
             
             # Empty means no EDF and no TSV (other files can exist)
-            if edf_count == 0 and tsv_count == 0:
+            if edf_count == 0 and tsv_count == 0 and arx_count == 0:
                 empty_folders.append((item, other_count))
                 log_line(self.log_path, f"Empty folder found: {item} ({other_count} other files)")
         
         return empty_folders
+    
+    def get_session_info(self, session_name):
+        """
+        Get information about a session folder.
+        
+        Args:
+            session_name: Session folder name like "ses-001"
+        
+        Returns:
+            Dict with session info, or None if not found
+        """
+        folder_path = os.path.join(self.root_dir, session_name)
+        
+        if not os.path.isdir(folder_path):
+            return None
+        
+        edf_count = 0
+        json_count = 0
+        tsv_count = 0
+        other_count = 0
+        total_size = 0
+        files = []
+        
+        for root, dirs, filenames in os.walk(folder_path):
+            for fn in filenames:
+                filepath = os.path.join(root, fn)
+                rel_path = os.path.relpath(filepath, folder_path)
+                files.append(rel_path)
+                
+                try:
+                    total_size += os.path.getsize(filepath)
+                except:
+                    pass
+                
+                lower = fn.lower()
+                if lower.endswith(".edf"):
+                    edf_count += 1
+                elif lower.endswith(".json"):
+                    json_count += 1
+                elif lower.endswith(".tsv"):
+                    tsv_count += 1
+                else:
+                    other_count += 1
+        
+        return {
+            "name": session_name,
+            "path": folder_path,
+            "edf_count": edf_count,
+            "json_count": json_count,
+            "tsv_count": tsv_count,
+            "other_count": other_count,
+            "total_files": len(files),
+            "total_size_mb": total_size / (1024 * 1024),
+            "files": files
+        }
     
     def delete_folder(self, folder_name):
         """
@@ -369,6 +456,48 @@ class FolderManager:
             if EXCEPTION_DEBUG:
                 raise e
             return False
+    
+    def delete_session(self, session_name, check_locks=True):
+        """
+        Delete a session folder with optional lock checking.
+        
+        Args:
+            session_name: Session folder name like "ses-001"
+            check_locks: If True, check for file locks before deleting
+        
+        Returns:
+            Tuple of (success: bool, error_message: str or None)
+        """
+        folder_path = os.path.join(self.root_dir, session_name)
+        
+        if not os.path.isdir(folder_path):
+            return False, f"Folder does not exist: {session_name}"
+        
+        # Check for locks if requested
+        if check_locks:
+            try:
+                from .file_lock_checker import FileLockChecker
+                checker = FileLockChecker(self.log_path)
+                result = checker.check_session_folder(folder_path, check_files=True)
+                
+                if result.has_locks:
+                    return False, f"Cannot delete - files are locked:\n{result.format_summary()}"
+            except ImportError:
+                log_line(self.log_path, "Warning: FileLockChecker not available, skipping lock check")
+        
+        # Proceed with deletion
+        try:
+            shutil.rmtree(folder_path)
+            log_line(self.log_path, f"Successfully deleted session: {session_name}")
+            return True, None
+        except PermissionError as e:
+            return False, f"Permission denied: {e}"
+        except OSError as e:
+            return False, f"OS error: {e}"
+        except Exception as e:
+            if EXCEPTION_DEBUG:
+                raise e
+            return False, f"Unexpected error: {e}"
     
     def sync_files_to_folders(self, dry_run=False):
         """
@@ -474,7 +603,7 @@ class FolderManager:
         
         return discrepancies
     
-    def rename_folders(self, old_to_new_map, dry_run=False):
+    def rename_folders(self, old_to_new_map, dry_run=False, check_locks=True):
         """
         Rename session folders according to mapping.
         Uses temp prefix to handle collisions.
@@ -482,12 +611,30 @@ class FolderManager:
         Args:
             old_to_new_map: Dict mapping old session -> new session
             dry_run: If True, only log what would happen
+            check_locks: If True, check for file locks before renaming
         
         Returns:
             True if all renames succeeded (or dry run)
         """
         if not old_to_new_map:
             return True
+        
+        # Check for locks first if not dry run
+        if check_locks and not dry_run:
+            try:
+                from .file_lock_checker import FileLockChecker
+                checker = FileLockChecker(self.log_path)
+                result = checker.check_sessions_for_operation(
+                    self.root_dir, 
+                    list(old_to_new_map.keys())
+                )
+                
+                if result.has_locks:
+                    log_line(self.log_path, "ABORT: Files are locked, cannot proceed with rename")
+                    log_line(self.log_path, result.format_detailed_report())
+                    return False
+            except ImportError:
+                log_line(self.log_path, "Warning: FileLockChecker not available, skipping lock check")
         
         temp_prefix = "__tmp__"
         temp_map = {}  # temp_path -> final_folder

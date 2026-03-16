@@ -67,10 +67,11 @@ import os
 import queue
 import sys
 import threading
+import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # ---------------------------
 # Optional deps
@@ -508,86 +509,138 @@ def scan_folder(
     annotation_labels: Optional[List[str]] = None,
     include_all_files: bool = True,
     max_records_per_file: Optional[int] = None,
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> ScanResult:
     if not input_folder.exists() or not input_folder.is_dir():
         raise ValueError(f"Input folder does not exist or is not a folder: {input_folder}")
 
+    def _emit(ev: Dict[str, Any]) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(ev)
+        except Exception:
+            # Never let UI callback break scanning
+            return
+
+    _emit({"phase": "scan", "stage": "enumerating", "root": str(input_folder)})
+
     edf_files = iter_edf_files(input_folder)
+    total = len(edf_files)
+
+    _emit({"phase": "scan", "stage": "start", "root": str(input_folder), "total": total})
+
     entries: List[ScanFileEntry] = []
 
+    use_tqdm = (tqdm is not None) and (progress_cb is None)
     iterator = edf_files
-    if tqdm is not None:
-        iterator = tqdm(edf_files, desc="Scanning EDF/BDF", unit="file")  # type: ignore
+    pbar = None
+    if use_tqdm:
+        pbar = tqdm(edf_files, desc="Scanning EDF/BDF", unit="file")  # type: ignore
+        iterator = pbar  # type: ignore
 
-    for fpath in iterator:
+    for i, fpath in enumerate(iterator):
+        # per-file info that can be computed cheaply for progress display
         try:
-            size_bytes = fpath.stat().st_size
+            rel_path = str(fpath.relative_to(input_folder))
         except Exception:
-            size_bytes = -1
+            rel_path = str(fpath)
 
-        rel_path = str(fpath.relative_to(input_folder))
-        folder_rel, p1, p2, p3 = _rel_parents(fpath, input_folder)
-        folder_name = Path(folder_rel).name if folder_rel not in ("", ".") else "."
-        file_name = fpath.name
+        _emit({
+            "phase": "scan",
+            "stage": "file_start",
+            "index": i + 1,
+            "done": i,
+            "total": total,
+            "path": str(fpath),
+            "rel_path": rel_path,
+        })
 
-        # Raw header (also needed for TAL scan)
-        raw_header = None
-        try:
-            raw_header = parse_edf_header_raw(fpath)
-        except Exception as e:
-            LOG.warning("Failed raw header parse for %s: %s", fpath, e)
-            raw_header = None
-
-        has_nonblank = False
-        sample_ann = None
-        warnings: List[str] = []
-
-        if raw_header is not None:
+        if pbar is not None:
+            # show a hint of current file in CLI mode
             try:
-                has_nonblank, sample_ann, warnings = _scan_file_for_nonblank_annotation(
-                    fpath,
-                    raw_header,
-                    annotation_labels=annotation_labels,
-                    max_records=max_records_per_file,
-                )
-            except Exception as e:
-                warnings.append(f"Annotation scan failed: {e}")
+                pbar.set_postfix_str(rel_path[-60:])
+            except Exception:
+                pass
 
-        # pyedflib headers
-        py_hdr = None
-        py_sig_hdrs = None
-        duration_sec = None
         try:
-            py_hdr, py_sig_hdrs, duration_sec = _pyedflib_headers(fpath)
-        except Exception as e:
-            warnings.append(f"pyedflib header read failed: {e}")
+            try:
+                size_bytes = fpath.stat().st_size
+            except Exception:
+                size_bytes = -1
 
-        # If user wants include_all_files=False, keep only those with nonblank
-        if (not include_all_files) and (not has_nonblank):
-            continue
+            folder_rel, p1, p2, p3 = _rel_parents(fpath, input_folder)
+            folder_name = Path(folder_rel).name if folder_rel not in ("", ".") else "."
+            file_name = fpath.name
 
-        entry = ScanFileEntry(
-            abs_path=str(fpath.resolve()),
-            rel_path=rel_path,
-            file_name=file_name,
-            folder_rel=folder_rel,
-            folder_name=folder_name,
-            parent1=p1,
-            parent2=p2,
-            parent3=p3,
-            size_bytes=int(size_bytes),
-            duration_sec=duration_sec,
-            has_nonblank_annotation=bool(has_nonblank),
-            sample_annotation=sample_ann,
-            warnings=warnings,
-            pyedflib_header=py_hdr,
-            pyedflib_signal_headers=py_sig_hdrs,
-            raw_header=_safe_json(raw_header),
-            selected=bool(has_nonblank),  # default selection: redact those with real nonblank annotations
-        )
-        entries.append(entry)
+            # Raw header (also needed for TAL scan)
+            raw_header = None
+            try:
+                raw_header = parse_edf_header_raw(fpath)
+            except Exception as e:
+                LOG.warning("Failed raw header parse for %s: %s", fpath, e)
+                raw_header = None
 
-    return ScanResult(
+            has_nonblank = False
+            sample_ann = None
+            warnings: List[str] = []
+
+            if raw_header is not None:
+                try:
+                    has_nonblank, sample_ann, warnings = _scan_file_for_nonblank_annotation(
+                        fpath,
+                        raw_header,
+                        annotation_labels=annotation_labels,
+                        max_records=max_records_per_file,
+                    )
+                except Exception as e:
+                    warnings.append(f"Annotation scan failed: {e}")
+
+            # pyedflib headers
+            py_hdr = None
+            py_sig_hdrs = None
+            duration_sec = None
+            try:
+                py_hdr, py_sig_hdrs, duration_sec = _pyedflib_headers(fpath)
+            except Exception as e:
+                warnings.append(f"pyedflib header read failed: {e}")
+
+            # If user wants include_all_files=False, keep only those with nonblank
+            if (not include_all_files) and (not has_nonblank):
+                continue
+
+            entry = ScanFileEntry(
+                abs_path=str(fpath.resolve()),
+                rel_path=rel_path,
+                file_name=file_name,
+                folder_rel=folder_rel,
+                folder_name=folder_name,
+                parent1=p1,
+                parent2=p2,
+                parent3=p3,
+                size_bytes=int(size_bytes),
+                duration_sec=duration_sec,
+                has_nonblank_annotation=bool(has_nonblank),
+                sample_annotation=sample_ann,
+                warnings=warnings,
+                pyedflib_header=py_hdr,
+                pyedflib_signal_headers=py_sig_hdrs,
+                raw_header=_safe_json(raw_header),
+                selected=bool(has_nonblank),  # default selection: redact those with real nonblank annotations
+            )
+            entries.append(entry)
+        finally:
+            _emit({
+                "phase": "scan",
+                "stage": "file_done",
+                "index": i + 1,
+                "done": i + 1,
+                "total": total,
+                "path": str(fpath),
+                "rel_path": rel_path,
+            })
+
+    result = ScanResult(
         tool="EDF_Folder_Scan_Redact_Tool",
         created_at=_now_iso(),
         source_root=str(input_folder.resolve()),
@@ -595,7 +648,9 @@ def scan_folder(
         entries=entries,
     )
 
+    _emit({"phase": "scan", "stage": "done", "total": total, "kept": len(entries)})
 
+    return result
 def save_scan_json(scan: ScanResult, out_json: Path) -> None:
     out_json.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -689,11 +744,20 @@ def redact_from_scan(
     verify: bool = False,
     verify_level: str = "thorough",
     only_selected: bool = True,
+    progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """
     Redact based on scan result. Returns summary dict.
     """
     _require_backend()
+
+    def _emit(ev: Dict[str, Any]) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(ev)
+        except Exception:
+            return
 
     output_folder.mkdir(parents=True, exist_ok=True)
 
@@ -713,25 +777,50 @@ def redact_from_scan(
     skipped = 0
     failed: List[Dict[str, Any]] = []
 
-    entries = scan.entries
+    entries_all = scan.entries
+    if only_selected:
+        skipped = sum(1 for e in entries_all if not e.selected)
+        entries = [e for e in entries_all if e.selected]
+    else:
+        entries = list(entries_all)
+
+    total = len(entries)
+    _emit({"phase": "redact", "stage": "start", "total": total, "output_folder": str(output_folder)})
+
+    use_tqdm = (tqdm is not None) and (progress_cb is None)
     iterator = entries
-    if tqdm is not None:
-        iterator = tqdm(entries, desc="Redacting", unit="file")  # type: ignore
+    pbar = None
+    if use_tqdm:
+        pbar = tqdm(entries, desc="Redacting", unit="file")  # type: ignore
+        iterator = pbar  # type: ignore
 
-    for entry in iterator:
-        if only_selected and not entry.selected:
-            skipped += 1
-            continue
+    for i, entry in enumerate(iterator):
+        rel_path = entry.rel_path
+        _emit({
+            "phase": "redact",
+            "stage": "file_start",
+            "index": i + 1,
+            "done": i,
+            "total": total,
+            "rel_path": rel_path,
+            "path": entry.abs_path,
+        })
 
-        in_path = _resolve_input_path(entry, source_root)
-        if not in_path.exists():
-            failed.append({"path": entry.abs_path, "reason": "Input file missing"})
-            continue
-
-        out_path = output_folder / Path(entry.rel_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        if pbar is not None:
+            try:
+                pbar.set_postfix_str(rel_path[-60:])
+            except Exception:
+                pass
 
         try:
+            in_path = _resolve_input_path(entry, source_root)
+            if not in_path.exists():
+                failed.append({"path": entry.abs_path, "reason": "Input file missing"})
+                continue
+
+            out_path = output_folder / Path(entry.rel_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
             ok = anonymize_edf_complete(
                 str(in_path),
                 str(out_path),
@@ -765,7 +854,20 @@ def redact_from_scan(
             processed += 1
 
         except Exception as e:
-            failed.append({"path": str(in_path), "reason": str(e)})
+            failed.append({"path": str(entry.abs_path), "reason": str(e)})
+
+        finally:
+            _emit({
+                "phase": "redact",
+                "stage": "file_done",
+                "index": i + 1,
+                "done": i + 1,
+                "total": total,
+                "rel_path": rel_path,
+                "path": entry.abs_path,
+            })
+
+    _emit({"phase": "redact", "stage": "done", "total": total})
 
     return {
         "processed": processed,
@@ -775,12 +877,6 @@ def redact_from_scan(
         "output_folder": str(output_folder.resolve()),
         "log_dir": str(log_dir.resolve()),
     }
-
-
-# ---------------------------
-# GUI
-# ---------------------------
-
 def run_gui() -> None:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -994,9 +1090,21 @@ def run_gui() -> None:
     actions = ttk.Frame(bottom)
     actions.grid(row=0, column=0, sticky="w")
 
-    progress = ttk.Progressbar(bottom, mode="indeterminate")
+    # Progress + status (shows current file, counts, elapsed, ETA)
+    progress = ttk.Progressbar(bottom, mode="indeterminate", length=260)
     progress.grid(row=0, column=1, sticky="e", padx=(10, 0))
 
+    status_var = tk.StringVar(value="")
+    file_var = tk.StringVar(value="")
+    eta_var = tk.StringVar(value="")
+
+    status_frame = ttk.Frame(bottom)
+    status_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+    status_frame.columnconfigure(0, weight=1)
+
+    ttk.Label(status_frame, textvariable=status_var).grid(row=0, column=0, sticky="w")
+    ttk.Label(status_frame, textvariable=file_var).grid(row=1, column=0, sticky="w")
+    ttk.Label(status_frame, textvariable=eta_var).grid(row=2, column=0, sticky="w")
     log_frame = ttk.LabelFrame(main, text="Log", padding=8)
     log_frame.grid(row=5, column=0, sticky="nsew", pady=(8, 0))
     main.rowconfigure(5, weight=0)
@@ -1146,13 +1254,155 @@ def run_gui() -> None:
     # Background worker
     worker_thread = None
     stop_flag = False
+    # Progress event queue (worker thread -> UI thread)
+    progress_q: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+    task_state = {
+        "phase": "",
+        "start_ts": 0.0,
+        "total": 0,
+        "done": 0,
+        "current_file": "",
+    }
 
-    def run_in_thread(fn, on_done=None):
+    def _shorten_middle(s: str, max_len: int = 160) -> str:
+        s = str(s)
+        if len(s) <= max_len:
+            return s
+        keep_front = max_len // 2 - 10
+        keep_back = max_len - keep_front - 3
+        return s[:keep_front] + "..." + s[-keep_back:]
+
+    def _fmt_hms(seconds: Optional[float]) -> str:
+        if seconds is None or seconds != seconds or seconds < 0:
+            return "?"
+        seconds_i = int(round(seconds))
+        h = seconds_i // 3600
+        m = (seconds_i % 3600) // 60
+        s = seconds_i % 60
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    def _set_status(phase: str, done: int, total: int, current_file: str = "") -> None:
+        phase_disp = phase.capitalize() if phase else "Working"
+        total = int(total) if total is not None else 0
+        done = int(done) if done is not None else 0
+        done = max(0, min(done, total if total > 0 else done))
+
+        task_state["phase"] = phase
+        task_state["total"] = total
+        task_state["done"] = done
+        if current_file:
+            task_state["current_file"] = current_file
+
+        elapsed = max(0.0, time.time() - float(task_state.get("start_ts", 0.0) or 0.0))
+        rate = (done / elapsed) if (elapsed > 0 and done > 0) else 0.0
+        left = (total - done) if total >= done else 0
+        eta = (left / rate) if rate > 0 else None
+        pct = (100.0 * done / total) if total > 0 else 0.0
+
+        status_var.set(
+            f"{phase_disp}: {done}/{total} ({pct:.1f}%) • left {left} • {rate:.2f} files/s"
+            if total > 0 else f"{phase_disp}: {done} files"
+        )
+        file_var.set(f"Current: {_shorten_middle(task_state.get('current_file',''), 180)}" if task_state.get("current_file") else "")
+        eta_var.set(f"Elapsed {_fmt_hms(elapsed)} • ETA {_fmt_hms(eta)}" if eta is not None else f"Elapsed {_fmt_hms(elapsed)}")
+
+        # Update progress bar
+        if total > 0:
+            # switch to determinate
+            try:
+                progress.stop()
+            except Exception:
+                pass
+            try:
+                progress.configure(mode="determinate", maximum=max(1, total))
+            except Exception:
+                pass
+            try:
+                progress["value"] = done
+            except Exception:
+                pass
+
+    def _reset_progress_ui(phase: str) -> None:
+        task_state["phase"] = phase
+        task_state["start_ts"] = time.time()
+        task_state["total"] = 0
+        task_state["done"] = 0
+        task_state["current_file"] = ""
+        status_var.set(f"{phase.capitalize() if phase else 'Working'}: preparing...")
+        file_var.set("")
+        eta_var.set("")
+        try:
+            progress.configure(mode="indeterminate", maximum=100)
+            progress["value"] = 0
+            progress.start(10)
+        except Exception:
+            pass
+
+    def _handle_progress_event(ev: Dict[str, Any]) -> None:
+        phase = str(ev.get("phase", "") or "")
+        stage = str(ev.get("stage", "") or "")
+
+        if stage == "enumerating":
+            _reset_progress_ui(phase or "scan")
+            status_var.set("Scanning: enumerating files...")
+            return
+
+        if stage == "start":
+            # total is now known
+            total = int(ev.get("total", 0) or 0)
+            if not task_state.get("start_ts"):
+                task_state["start_ts"] = time.time()
+            task_state["phase"] = phase
+            task_state["total"] = total
+            task_state["done"] = 0
+            task_state["current_file"] = ""
+            _set_status(phase or "working", 0, total, "")
+            return
+
+        if stage == "file_start":
+            total = int(ev.get("total", task_state.get("total", 0)) or 0)
+            done = int(ev.get("done", task_state.get("done", 0)) or 0)
+            cur = ev.get("rel_path") or ev.get("path") or ""
+            _set_status(phase or task_state.get("phase", ""), done, total, str(cur))
+            return
+
+        if stage == "file_done":
+            total = int(ev.get("total", task_state.get("total", 0)) or 0)
+            done = int(ev.get("done", task_state.get("done", 0)) or 0)
+            cur = ev.get("rel_path") or ev.get("path") or task_state.get("current_file", "")
+            _set_status(phase or task_state.get("phase", ""), done, total, str(cur))
+            return
+
+        if stage == "done":
+            total = int(ev.get("total", task_state.get("total", 0)) or 0)
+            done = int(ev.get("done", total) or total)
+            _set_status(phase or task_state.get("phase", ""), done, total, task_state.get("current_file", ""))
+            phase_disp = (phase or task_state.get("phase", "")).capitalize() or "Work"
+            eta_var.set(f"{phase_disp} completed in {_fmt_hms(time.time() - float(task_state.get('start_ts', 0.0) or 0.0))}")
+            try:
+                progress.stop()
+            except Exception:
+                pass
+            return
+
+    def _drain_progress_events() -> None:
+        try:
+            while True:
+                ev = progress_q.get_nowait()
+                if isinstance(ev, dict):
+                    _handle_progress_event(ev)
+        except queue.Empty:
+            pass
+
+    def run_in_thread(fn, on_done=None, phase: str = "working"):
         nonlocal worker_thread, stop_flag
         if worker_thread and worker_thread.is_alive():
             messagebox.showwarning("Busy", "A task is already running.")
             return
         stop_flag = False
+
+        # Reset progress UI immediately
+        _reset_progress_ui(phase)
 
         def _target():
             try:
@@ -1163,12 +1413,11 @@ def run_gui() -> None:
                 if on_done:
                     root.after(0, lambda: on_done(None, e))
             finally:
+                # If worker didn't emit a final "done", stop the spinner anyway
                 root.after(0, lambda: progress.stop())
 
-        progress.start(10)
         worker_thread = threading.Thread(target=_target, daemon=True)
         worker_thread.start()
-
     def do_scan():
         nonlocal current_scan
         if pyedflib is None:
@@ -1181,7 +1430,7 @@ def run_gui() -> None:
 
         def _work():
             log(f"Scanning folder: {s}")
-            scan = scan_folder(Path(s), include_all_files=include_all.get())
+            scan = scan_folder(Path(s), include_all_files=include_all.get(), progress_cb=lambda ev: progress_q.put(ev))
             return scan
 
         def _done(scan, err):
@@ -1197,7 +1446,7 @@ def run_gui() -> None:
             if not json_path_var.get().strip():
                 json_path_var.set(str(Path(s) / "edf_scan.json"))
 
-        run_in_thread(_work, _done)
+        run_in_thread(_work, _done, phase='scan')
 
     def do_redact():
         nonlocal current_scan
@@ -1246,6 +1495,7 @@ def run_gui() -> None:
                 verify=verify_var.get(),
                 verify_level=verify_level_var.get(),
                 only_selected=True,
+                progress_cb=lambda ev: progress_q.put(ev),
             )
             return summary
 
@@ -1264,7 +1514,7 @@ def run_gui() -> None:
                 f"Logs: {summary.get('log_dir')}"
             )
 
-        run_in_thread(_work, _done)
+        run_in_thread(_work, _done, phase='redact')
 
     # Action buttons
     ttk.Button(actions, text="Scan Folder", command=do_scan).grid(row=0, column=0, padx=3, pady=2)
@@ -1284,6 +1534,7 @@ def run_gui() -> None:
     # Poll log handler
     def poll():
         handler.poll()
+        _drain_progress_events()
         root.after(100, poll)
 
     poll()

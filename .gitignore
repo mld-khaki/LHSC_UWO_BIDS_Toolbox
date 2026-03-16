@@ -27,3 +27,5 @@ __pycache__/
 /src/natus_edf_tools/StepC_BIDS_management/Redaction_TSV/_legacy
 /src/natus_edf_tools/StepC_BIDS_management/Redaction_TSV/roberta_method/_legacy
 models/redactor/robarta_pytorch_model.bin
+src/natus_edf_tools/StepC_BIDS_management/data2bids/edf2bids.last
+*.zip
