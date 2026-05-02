@@ -528,6 +528,19 @@ def process_tal_blank(tal_bytes, logger, redaction_logger):
         while current_pos < len(tal):
             annotation_end = tal.find(0x14, current_pos)
             if annotation_end == -1:
+                # No further \x14 separator — blank from here to the null terminator.
+                # This is the common case: +onset\x14annotation_text\x00
+                # where the annotation text has no trailing \x14.
+                null_pos = tal.find(0, current_pos)
+                if null_pos == -1:
+                    null_pos = len(tal)
+                if null_pos > current_pos:
+                    original_annotation = tal[current_pos:null_pos].decode("utf-8", errors="replace")
+                    if original_annotation.strip():
+                        redaction_logger.info(f"BLANKED ANNOTATION: '{original_annotation}'")
+                        logger.debug(f"Blanked annotation: '{original_annotation}'")
+                        modifications_made += 1
+                    tal[current_pos:null_pos] = b" " * (null_pos - current_pos)
                 break
 
             if annotation_end > current_pos:
