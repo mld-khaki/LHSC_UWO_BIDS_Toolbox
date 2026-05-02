@@ -758,6 +758,8 @@ class App(tk.Tk):
             rec["n_records_with_phi"]          = res.get("n_records_with_phi")
             rec["non_blank_byte_count"]        = res.get("non_blank_byte_count")
             rec["first_failing_record"]        = res.get("first_failing_record")
+            # Annotation content sample (PHI evaluation)
+            rec["annotation_content_sample"]   = res.get("annotation_content_sample")
             # Archive info
             rec["archive_member"]              = res.get("archive_member")
             rec["notes"]                       = res.get("notes", [])
@@ -816,6 +818,7 @@ class App(tk.Tk):
             "annotation_channels_present", "annotations_blank_ok",
             "n_records_checked", "n_records_with_phi",
             "non_blank_byte_count", "first_failing_record",
+            "annotation_content_sample",
             "archive_member", "notes", "error",
         ]
         try:
@@ -828,6 +831,11 @@ class App(tk.Tk):
                     # Flatten list fields to semicolon-separated strings for CSV
                     rec["notes"] = "; ".join(rec.get("notes") or [])
                     rec["annotation_channel_labels"] = "; ".join(rec.get("annotation_channel_labels") or [])
+                    # Flatten TAL sample to "onset: text1, text2 | onset: text1 ..." for CSV
+                    sample = rec.get("annotation_content_sample") or []
+                    rec["annotation_content_sample"] = " | ".join(
+                        f"{e['onset']}: {', '.join(e['texts'])}" for e in sample if e.get("texts")
+                    ) or ""
                     writer.writerow(rec)
             messagebox.showinfo(_APP_TITLE, f"CSV saved:\n{path}")
         except Exception as exc:

@@ -391,6 +391,57 @@ def anonymize_edf_file(
 # Verification (for StepB)
 # -----------------------------
 
+
+def _extract_tal_content(seg: bytes, max_tals: int = 20, max_text_len: int = 80) -> List[Dict[str, Any]]:
+    """
+    Parse TAL (Time-stamped Annotation List) bytes from one annotation channel
+    segment and return the human-readable content.
+
+    Each returned dict has:
+      onset  – onset timestamp string (e.g. "+1.234")
+      texts  – list of annotation text strings found in this TAL
+               (empty list for timekeeping TALs)
+
+    max_tals     – stop after this many TALs per segment (safety cap)
+    max_text_len – truncate each individual text string to this length
+    """
+    entries: List[Dict[str, Any]] = []
+    end = len(seg)
+    pos = 0
+    while pos < end and len(entries) < max_tals:
+        if seg[pos] not in (ord('+'), ord('-')):
+            pos += 1
+            continue
+
+        # Find end of onset: first 0x14
+        sep1 = seg.find(0x14, pos)
+        if sep1 == -1:
+            break
+        onset = seg[pos:sep1].decode('ascii', errors='replace').strip()
+
+        # Find null terminator
+        null_pos = seg.find(0x00, sep1)
+        if null_pos == -1:
+            null_pos = end
+
+        # Collect text segments between 0x14 separators
+        texts: List[str] = []
+        cursor = sep1 + 1
+        while cursor < null_pos:
+            next_sep = seg.find(0x14, cursor, null_pos)
+            chunk_end = next_sep if next_sep != -1 else null_pos
+            raw = seg[cursor:chunk_end]
+            text = raw.decode('utf-8', errors='replace').strip()
+            if text:                                     # skip empty / duration-only segments
+                texts.append(text[:max_text_len])
+            cursor = (next_sep + 1) if next_sep != -1 else null_pos
+
+        if onset:                                        # skip malformed entries
+            entries.append({"onset": onset, "texts": texts})
+        pos = null_pos + 1
+
+    return entries
+
 def verify_edf_anonymized(
     edf_path: str,
     *,
@@ -419,6 +470,9 @@ def verify_edf_anonymized(
       non_blank_byte_count   – total count of flagged bytes across all checked records
       first_failing_record   – 0-based index of the first record with residual PHI
                                (None if all checked records are clean)
+      annotation_content_sample – parsed TAL entries from the first failing record;
+                               list of {"onset": str, "texts": [str, ...]} dicts
+                               so you can judge whether flagged bytes are real PHI
     """
     logger = _setup_logger(None)
 
@@ -440,6 +494,8 @@ def verify_edf_anonymized(
         "n_records_with_phi": None,
         "non_blank_byte_count": None,
         "first_failing_record": None,
+        # raw annotation content from first failing record (list of TAL dicts)
+        "annotation_content_sample": None,
         "notes": [],
     }
 
@@ -522,6 +578,11 @@ def verify_edf_anonymized(
                         records_with_phi += 1
                         if first_failing is None:
                             first_failing = rec_idx
+                            # Capture TAL content from this first bad record
+                            sample: List[Dict[str, Any]] = []
+                            for off2, sz2 in annot_segs:
+                                sample.extend(_extract_tal_content(recbuf[off2:off2 + sz2]))
+                            result["annotation_content_sample"] = sample
                         ok = False
 
                 result["annotations_blank_ok"] = ok
