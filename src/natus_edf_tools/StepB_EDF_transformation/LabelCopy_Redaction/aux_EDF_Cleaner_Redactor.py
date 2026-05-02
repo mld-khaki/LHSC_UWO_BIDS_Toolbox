@@ -291,6 +291,28 @@ def _split_field_tokens(field_str: str):
     return field_str.strip().split()
 
 
+def _is_edfplus_patient_field(parts: list) -> bool:
+    """
+    Return True only if parts looks like a genuine EDF+ patient field:
+        patientcode gender birthdate patientname...
+    where gender is M/F/X and birthdate is DD-MON-YYYY or X.
+
+    Natus files sometimes write free-form text (e.g. "John Smith extra info")
+    that has 4+ tokens but is NOT in EDF+ format. Without this check, the
+    parser would misidentify name tokens as patientcode/gender/birthdate and
+    leave them un-anonymized when anonymize_patientcode=False.
+    """
+    if len(parts) < 4:
+        return False
+    gender = parts[1].upper()
+    if gender not in ("M", "F", "X"):
+        return False
+    birthdate = parts[2].upper()
+    if birthdate != "X" and not re.match(r'^\d{2}-[A-Z]{3}-\d{4}$', birthdate):
+        return False
+    return True
+
+
 def _build_patient_field(
     original_patient_field: str,
     *,
@@ -303,12 +325,20 @@ def _build_patient_field(
     EDF+ patient field format (common):
         patientcode sex birthdate patientname...
 
-    We preserve token count/spacing as best-effort, then pad/truncate to 80 bytes later.
+    IMPORTANT: only trust the token structure if the field actually looks like
+    EDF+ format (gender is M/F/X, birthdate matches DD-MON-YYYY or X).
+    Natus files can write free-form patient names here; if the format is not
+    recognisable we wipe the whole field to avoid leaking name tokens that
+    were misidentified as patientcode.
     """
     parts = _split_field_tokens(original_patient_field)
-    if len(parts) < 4:
-        # Fallback: if not parseable, either wipe whole field if any anonymize requested
-        if anonymize_patientcode or anonymize_gender or anonymize_birthdate or anonymize_patientname:
+
+    any_anon = anonymize_patientcode or anonymize_gender or anonymize_birthdate or anonymize_patientname
+
+    if not _is_edfplus_patient_field(parts):
+        # Field is not in EDF+ format — cannot safely extract sub-fields.
+        # Wipe everything if any anonymization is requested (safe default).
+        if any_anon:
             return "X X X X"
         return original_patient_field.strip()
 

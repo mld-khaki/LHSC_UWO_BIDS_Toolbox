@@ -46,6 +46,8 @@ from collections import namedtuple
 import numpy as np
 from datetime import datetime
 
+EXCEPTION_DEBUG = True
+
 if sys.version_info[0] != 3 or sys.version_info[1] < 5:
   print("Must be using Python version >= 3.5.0")
   sys.exit()
@@ -188,12 +190,12 @@ class EDFreader:
 
   EDFAnnotationStruct = namedtuple("annotation", ["onset", "duration", "description","block"])
 
-
-
-  def __init__(self, path: str, read_annotations=False):  # Add a flag
+  def __init__(self, path: str, read_annotations=False):  # Default False: annotation parsing causes significant slowdown; pass True only when annotations are needed
     """Creates an instance of an EDF reader.
 
     Path is the path to the EDF file.
+    read_annotations: If True, parse EDF+ annotations (slower). Default False — skip annotation
+      parsing for performance. Only set True when annotation content is explicitly required.
     """
     self.__path = path
     self.__status_ok = 0
@@ -230,17 +232,17 @@ class EDFreader:
     self.__err = self.__checkEDFheader()
     if self.__err:
       self.__file_in.close()
-      raise EDFexception("File is not valid EDF(+) or BDF(+).")
+      raise EDFexception(f"File is not valid EDF(+) or BDF(+). Header error code: {self.__err}")
 
     if self.__discontinuous:
       self.__file_in.close()
       raise EDFexception("Library does not support discontinuous EDF/BDF files.")
 
     self.__annotlist_sz = 0
-
     self.__annots_in_file = 0
 
     if self.__edfplus == 0 and self.__bdfplus == 0:
+      # Standard EDF/BDF (not plus format) - no annotations to parse
       self.__plus_patientcode = ""
       self.__plus_gender = ""
       self.__plus_birthdate = ""
@@ -251,18 +253,15 @@ class EDFreader:
       self.__plus_equipment = ""
       self.__plus_recording_additional = ""
     else:
+      # EDF+ or BDF+ format
       self.__patient = ""
       self.__recording = ""
       
       if read_annotations:
         self.__err = self.__get_annotations()
         if self.__err != 0:
-            self.__file_in.close()
-            raise EDFexception(f"Invalid EDF+ or BDF+ file., issue = {self.__err}")
-      # self.__err = self.__get_annotations()
-      if self.__err != 0:
-        self.__file_in.close()
-        raise EDFexception("File is not valid EDF+ or BDF+., issue = {self.__err}")
+          self.__file_in.close()
+          raise EDFexception(f"Invalid EDF+ or BDF+ annotations. Error code: {self.__err}")
 
     self.__status_ok = 1
 
@@ -279,7 +278,9 @@ class EDFreader:
     """
     try:
       self.close()
-    except Exception:
+    except Exception as e:
+      if EXCEPTION_DEBUG == True:
+        raise(e)
       pass
     # Do NOT suppress exceptions
     return False
@@ -880,6 +881,305 @@ class EDFreader:
 
   def __get_annotations(self):
       """
+      Annotation parser that skips bad records instead of failing.
+      """
+      import time
+      import os
+      import io
+      from datetime import datetime
+  
+      verbose = os.environ.get("EDFREADER_VERBOSE", "0").strip().lower() in (
+          "1", "true", "yes", "on"
+      )
+  
+      def vprint(*args):
+          if verbose:
+              print("[EDFREADER][ANNOTS]", *args, flush=True)
+
+      def wprint(*args):
+          print("[EDFREADER][ANNOTS][WARN]", *args, flush=True)
+
+      def eprint(*args):
+          print("[EDFREADER][ANNOTS][ERROR]", *args, flush=True)
+  
+      STATUS_INTERVAL_SEC = 5.0
+      last_status_ts = time.monotonic()
+  
+      def maybe_status(msg):
+          nonlocal last_status_ts
+          if not verbose:
+              return
+          now = time.monotonic()
+          if now - last_status_ts >= STATUS_INTERVAL_SEC:
+              vprint(msg)
+              last_status_ts = now
+  
+      i = j = k = p = r = n = 0
+      max_ = 0
+      onset = duration = duration_start = zero = 0
+      max_tal_ln = 0
+      error = 0
+      annots_in_record = 0
+      annots_in_tal = 0
+      elapsedtime = 0
+      time_tmp = 0
+
+      TK_WARN_TOL = int(round(0.050 * self.EDFLIB_TIME_DIMENSION))
+      TK_SOFTFAIL_TOL = int(round(0.250 * self.EDFLIB_TIME_DIMENSION))
+      _TICKS_PER_MS = (self.EDFLIB_TIME_DIMENSION / 1000.0)
+      MAX_TK_MSGS = 10
+      timekeeping_warn_cnt = 0
+      timekeeping_softfail_cnt = 0
+      skipped_records = 0
+
+      samplesize = 2
+  
+      data_record_duration = self.__long_data_record_duration
+  
+      if self.__bdfplus != 0:
+          samplesize = 3
+  
+      for i in range(self.__nr_annot_chns):
+          tal_bytes = self.__param_smp_per_record[self.__annot_ch[i]] * samplesize
+          if max_tal_ln < tal_bytes:
+              max_tal_ln = tal_bytes
+  
+      if max_tal_ln < 128:
+          max_tal_ln = 128
+  
+      scratchpad = bytearray(max_tal_ln + 3)
+      time_in_txt = bytearray(max_tal_ln + 3)
+      duration_in_txt = bytearray(max_tal_ln + 3)
+  
+      hdrsize = self.__hdrsize
+      recordsize = self.__recordsize
+  
+      vprint(
+          "ENTER __get_annotations",
+          f"path={getattr(self, '_EDFreader__path', '<unknown>')}",
+          f"datarecords={self.__datarecords}",
+          f"nr_annot_chns={self.__nr_annot_chns}",
+      )
+  
+      if self.__nr_annot_chns <= 0:
+          vprint("No annotation channels detected")
+          return 0  # Not an error, just no annotations
+  
+      for i in range(self.__datarecords):
+  
+          maybe_status(f"Parsing record {i+1}/{self.__datarecords}")
+  
+          record_base = hdrsize + (i * recordsize)
+          error = 0
+          skip_this_record = False
+
+          for r in range(self.__nr_annot_chns):
+  
+              if skip_this_record:
+                  break
+
+              n = zero = onset = duration = duration_start = 0
+              annots_in_tal = annots_in_record = 0
+              time_in_txt[0] = 0
+              duration_in_txt[0] = 0
+  
+              p = self.__param_buf_offset[self.__annot_ch[r]]
+              max_ = self.__param_smp_per_record[self.__annot_ch[r]] * samplesize
+  
+              try:
+                  self.__file_in.seek(record_base + p, io.SEEK_SET)
+                  ann_buf = self.__file_in.read(max_)
+              except Exception as e:
+                  wprint(f"Error reading annotation bytes in record {i}: {e}. Skipping record.")
+                  skip_this_record = True
+                  skipped_records += 1
+                  if EXCEPTION_DEBUG == True:
+                    raise(e)
+                  break
+  
+              if len(ann_buf) != max_:
+                  wprint(f"Short read on annotation buffer in record {i}. Skipping record.")
+                  skip_this_record = True
+                  skipped_records += 1
+                  break
+  
+              if ann_buf[max_ - 1] != 0:
+                  wprint(f"Invalid annotation signal in record {i}: last byte != 0. Skipping record.")
+                  skip_this_record = True
+                  skipped_records += 1
+                  break
+  
+              # Timekeeping annotation (r == 0)
+              if r == 0:
+                  error = 1
+                  for k in range(max_ - 2):
+                      scratchpad[k] = ann_buf[k]
+                      if scratchpad[k] == 20:
+                          if ann_buf[k + 1] != 20:
+                              wprint(f"Bad timekeeping structure in record {i}. Skipping record.")
+                              skip_this_record = True
+                              skipped_records += 1
+                              break
+  
+                          scratchpad[k] = 0
+  
+                          if self.__is_onset_number(scratchpad) != 0:
+                              wprint(f"Bad onset number in timekeeping record {i}. Skipping record.")
+                              skip_this_record = True
+                              skipped_records += 1
+                              break
+  
+                          time_tmp = self.__get_long_time(scratchpad)
+  
+                          if i != 0:
+                              if self.__discontinuous != 0:
+                                  if (time_tmp - elapsedtime) < data_record_duration:
+                                      wprint(f"Discontinuous timing issue in record {i}. Skipping record.")
+                                      skip_this_record = True
+                                      skipped_records += 1
+                                      break
+                              else:
+                                  actual_step = (time_tmp - elapsedtime)
+                                  expected_step = data_record_duration
+                                  if actual_step != expected_step:
+                                      drift = actual_step - expected_step
+                                      adrift = -drift if drift < 0 else drift
+                                      drift_ms = drift / _TICKS_PER_MS
+                                      if adrift <= TK_WARN_TOL:
+                                          timekeeping_warn_cnt += 1
+                                          if timekeeping_warn_cnt <= MAX_TK_MSGS:
+                                              wprint(f"Timekeeping drift {drift_ms:.3f} ms tolerated, record={i}")
+                                      elif adrift <= TK_SOFTFAIL_TOL:
+                                          timekeeping_softfail_cnt += 1
+                                          if timekeeping_softfail_cnt <= MAX_TK_MSGS:
+                                              wprint(f"Timekeeping drift {drift_ms:.3f} ms SOFT-FAIL, record={i}")
+                                      else:
+                                          wprint(f"Timekeeping drift {drift_ms:.3f} ms too large in record {i}. Skipping record.")
+                                          skip_this_record = True
+                                          skipped_records += 1
+                                          break
+                          else:
+                              if time_tmp < 0 or time_tmp >= self.EDFLIB_TIME_DIMENSION:
+                                  wprint(f"Invalid start time offset in record {i}. Skipping record.")
+                                  skip_this_record = True
+                                  skipped_records += 1
+                                  break
+  
+                              self.__starttime_offset = time_tmp
+                              self.__filestart_dt = datetime(
+                                  self.__startdate_year,
+                                  self.__startdate_month,
+                                  self.__startdate_day,
+                                  self.__starttime_hour,
+                                  self.__starttime_minute,
+                                  self.__starttime_second,
+                                  self.__starttime_offset // 10,
+                              )
+  
+                          elapsedtime = time_tmp
+                          error = 0
+                          break
+
+                  if skip_this_record:
+                      break
+  
+              # TAL parsing
+              for k in range(max_):
+                  scratchpad[n] = ann_buf[k]
+  
+                  if scratchpad[n] == 0:
+                      if zero == 0:
+                          if onset != 0 and n > 0:
+                              scratchpad[n] = 0
+                              description = bytes(scratchpad[:n]).decode("utf-8", errors="replace").rstrip('\x00').strip()
+                              
+                              if description and len(description) > 0:
+                                  onset_val = self.__get_long_time(time_in_txt)
+                                  if duration != 0:
+                                      duration_val = self.__get_long_time(duration_in_txt)
+                                  else:
+                                      duration_val = -1
+                                  
+                                  self.annotationslist.append((onset_val, duration_val, description))
+                                  self.__annots_in_file += 1
+                                  annots_in_tal += 1
+                                  annots_in_record += 1
+                          
+                          n = onset = duration = duration_start = annots_in_tal = 0
+                          scratchpad[0] = 0
+                      zero += 1
+                      continue
+  
+                  zero = 0
+  
+                  if scratchpad[n] in (20, 21):
+                      if scratchpad[n] == 21:
+                          duration_start = 1
+                          n += 1
+                          continue
+  
+                      if onset == 0:
+                          scratchpad[n] = 0
+                          if self.__is_onset_number(scratchpad) != 0:
+                              wprint(f"Bad onset number in record {i}, annotation skipped.")
+                              n = onset = duration = duration_start = 0
+                              scratchpad[0] = 0
+                              continue  # Skip this annotation, continue to next
+                          onset = 1
+                          self.__strcpy(time_in_txt, scratchpad)
+                          n = 0
+                          continue
+  
+                      if duration_start != 0:
+                          scratchpad[n] = 0
+                          if self.__is_duration_number(scratchpad) != 0:
+                              wprint(f"Bad duration number in record {i}, annotation skipped.")
+                              n = onset = duration = duration_start = 0
+                              scratchpad[0] = 0
+                              continue  # Skip this annotation, continue to next
+                          self.__strcpy(duration_in_txt, scratchpad)
+                          duration = 1
+                          duration_start = 0
+                          n = 0
+                          continue
+                      
+                      if n > 0:
+                          scratchpad[n] = 0
+                          description = bytes(scratchpad[:n]).decode("utf-8", errors="replace").rstrip('\x00').strip()
+                          
+                          if description and len(description) > 0:
+                              onset_val = self.__get_long_time(time_in_txt)
+                              if duration != 0:
+                                  duration_val = self.__get_long_time(duration_in_txt)
+                              else:
+                                  duration_val = -1
+                              
+                              self.annotationslist.append((onset_val, duration_val, description))
+                              self.__annots_in_file += 1
+                              annots_in_tal += 1
+                              annots_in_record += 1
+                      
+                      n = 0
+                      continue
+  
+                  n += 1
+                  if n >= (max_tal_ln - 1):
+                      wprint(f"Scratchpad overflow in record {i}, annotation skipped.")
+                      n = onset = duration = duration_start = 0
+                      scratchpad[0] = 0
+                      continue
+
+      if skipped_records > 0:
+          wprint(f"Total skipped records: {skipped_records}")
+
+      if (timekeeping_warn_cnt != 0) or (timekeeping_softfail_cnt != 0):
+          wprint(f"Timekeeping summary: warn_cnt={timekeeping_warn_cnt}, softfail_cnt={timekeeping_softfail_cnt}")
+
+      vprint("EXIT __get_annotations OK", f"annots_in_file={self.__annots_in_file}")
+      return 0
+      
+  def __get_annotations_prv(self):
+      """
       Verbose + safer + faster annotation parser.
   
       Verbosity:
@@ -1026,6 +1326,8 @@ class EDFreader:
                   ann_buf = self.__file_in.read(max_)
               except Exception as e:
                   vprint("ERROR reading annotation bytes", repr(e))
+                  if EXCEPTION_DEBUG == True:
+                    raise(e)
                   return 5
   
               if len(ann_buf) != max_:
@@ -2233,6 +2535,8 @@ class EDFreader:
     try:
       s = bytes(str_[:l]).decode("latin-1", errors="ignore")
     except Exception:
+      if EXCEPTION_DEBUG == True:
+        raise(e)
       return 1
 
     s = s.strip()
@@ -2328,6 +2632,8 @@ class EDFreader:
     try:
       s = bytes(str_[:l]).decode("latin-1", errors="ignore")
     except Exception:
+      if EXCEPTION_DEBUG == True:
+        raise(e)
       return 0
 
     s = s.strip()
@@ -2344,6 +2650,8 @@ class EDFreader:
     try:
       seconds = float(s)
     except Exception:
+      if EXCEPTION_DEBUG == True:
+        raise(e)
       return 0
 
     return int(round(seconds * self.EDFLIB_TIME_DIMENSION))

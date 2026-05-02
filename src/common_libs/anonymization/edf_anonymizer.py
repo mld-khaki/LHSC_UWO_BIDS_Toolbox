@@ -460,8 +460,23 @@ def verify_edf_anonymized(
 
                     for off, sz in annot_segs:
                         seg = recbuf[off:off + sz]
-                        # Accept fully zeroed (our policy) or fully space-padded.
-                        if not (all(b == 0 for b in seg) or all(b == 32 for b in seg)):
+                        # _blank_tal_annotations preserves TAL structure: timestamps and
+                        # 0x14 separator bytes are kept intact, only annotation text is
+                        # replaced with spaces. A fully-zeroed or fully-space segment is
+                        # therefore NOT the expected output. Instead, check that no
+                        # printable ASCII text remains between 0x14 separators — i.e. all
+                        # bytes in text positions are 0x20 (space) or 0x00 (null/pad).
+                        # We accept any segment that contains no non-space printable bytes
+                        # outside of TAL structural bytes (0x14, 0x00, '+', '-', digits,
+                        # '.', '+'). Simplified check: reject only if segment contains
+                        # printable non-space, non-structural bytes, which would indicate
+                        # un-redacted annotation text is present.
+                        non_blank = any(
+                            0x21 <= b <= 0x7E and b not in (0x14, ord('+'), ord('-'), ord('.'))
+                            and chr(b) not in '0123456789'
+                            for b in seg
+                        )
+                        if non_blank:
                             ok = False
                             break
                     if not ok:
