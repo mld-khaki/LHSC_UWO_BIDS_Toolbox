@@ -741,11 +741,24 @@ class App(tk.Tk):
                 "error":        r["error"],
             }
             res = r.get("result") or {}
+            # Header checks
             rec["header_ok"]           = res.get("header_ok")
             rec["header_patient_ok"]   = res.get("header_patient_ok")
             rec["header_recording_ok"] = res.get("header_recording_ok")
+            # EDF structure info
+            rec["n_signals"]                   = res.get("n_signals")
+            rec["n_records"]                   = res.get("n_records")
+            rec["record_duration_s"]           = res.get("record_duration_s")
+            rec["n_annotation_channels"]       = res.get("n_annotation_channels")
+            rec["annotation_channel_labels"]   = res.get("annotation_channel_labels", [])
             rec["annotation_channels_present"] = res.get("annotation_channels_present")
+            # Annotation blank check results
             rec["annotations_blank_ok"]        = res.get("annotations_blank_ok")
+            rec["n_records_checked"]           = res.get("n_records_checked")
+            rec["n_records_with_phi"]          = res.get("n_records_with_phi")
+            rec["non_blank_byte_count"]        = res.get("non_blank_byte_count")
+            rec["first_failing_record"]        = res.get("first_failing_record")
+            # Archive info
             rec["archive_member"]              = res.get("archive_member")
             rec["notes"]                       = res.get("notes", [])
             out.append(rec)
@@ -798,7 +811,11 @@ class App(tk.Tk):
         fieldnames = [
             "index", "path", "type", "status", "elapsed_s",
             "header_ok", "header_patient_ok", "header_recording_ok",
+            "n_signals", "n_records", "record_duration_s",
+            "n_annotation_channels", "annotation_channel_labels",
             "annotation_channels_present", "annotations_blank_ok",
+            "n_records_checked", "n_records_with_phi",
+            "non_blank_byte_count", "first_failing_record",
             "archive_member", "notes", "error",
         ]
         try:
@@ -807,9 +824,10 @@ class App(tk.Tk):
                                         extrasaction="ignore")
                 writer.writeheader()
                 for rec in records:
-                    # Flatten notes list to semicolon-separated string
                     rec = dict(rec)
+                    # Flatten list fields to semicolon-separated strings for CSV
                     rec["notes"] = "; ".join(rec.get("notes") or [])
+                    rec["annotation_channel_labels"] = "; ".join(rec.get("annotation_channel_labels") or [])
                     writer.writerow(rec)
             messagebox.showinfo(_APP_TITLE, f"CSV saved:\n{path}")
         except Exception as exc:

@@ -404,7 +404,21 @@ def verify_edf_anonymized(
     - patient/recording fields look scrubbed
     - (optional) annotation bytes are blank in the first N records
 
-    Returns dict with booleans and reasons (no raw PHI).
+    Returns dict with booleans and diagnostic counters (no raw PHI).
+
+    New fields (always populated):
+      n_signals              – total number of signals in the EDF
+      n_annotation_channels  – number of annotation signal channels found
+      annotation_channel_labels – list of annotation channel label strings
+      n_records              – total data records declared in header (-1 if unknown)
+      record_duration_s      – duration of each data record in seconds
+
+    New fields (populated only when require_blank_annotations=True):
+      n_records_checked      – how many records were actually read and inspected
+      n_records_with_phi     – how many of those records had non-blank annotation bytes
+      non_blank_byte_count   – total count of flagged bytes across all checked records
+      first_failing_record   – 0-based index of the first record with residual PHI
+                               (None if all checked records are clean)
     """
     logger = _setup_logger(None)
 
@@ -415,13 +429,32 @@ def verify_edf_anonymized(
         "header_ok": False,
         "annotation_channels_present": False,
         "annotations_blank_ok": None,
+        # structural info
+        "n_signals": None,
+        "n_annotation_channels": None,
+        "annotation_channel_labels": [],
+        "n_records": None,
+        "record_duration_s": None,
+        # annotation scan detail (populated when require_blank_annotations=True)
+        "n_records_checked": None,
+        "n_records_with_phi": None,
+        "non_blank_byte_count": None,
+        "first_failing_record": None,
         "notes": [],
     }
 
     try:
         st = parse_edf_structure(edf_path, logger=logger)
         annot_segs = st.annotation_segments()
+        annot_indices = st.annotation_signal_indices()
+        annot_labels = [st.labels[i] for i in annot_indices]
+
         result["annotation_channels_present"] = len(annot_segs) > 0
+        result["n_signals"] = st.n_signals
+        result["n_annotation_channels"] = len(annot_indices)
+        result["annotation_channel_labels"] = annot_labels
+        result["n_records"] = st.n_records
+        result["record_duration_s"] = st.record_duration
 
         with open(edf_path, "rb") as f:
             fixed = f.read(EDF_FIXED_HEADER_BYTES)
@@ -443,6 +476,9 @@ def verify_edf_anonymized(
             if require_blank_annotations:
                 if not annot_segs:
                     result["annotations_blank_ok"] = True
+                    result["n_records_checked"] = 0
+                    result["n_records_with_phi"] = 0
+                    result["non_blank_byte_count"] = 0
                     result["notes"].append("No annotation channels detected.")
                     return result
 
@@ -451,38 +487,48 @@ def verify_edf_anonymized(
 
                 f.seek(header_bytes)
                 ok = True
-                for _i in range(max_records_to_check):
+                records_checked = 0
+                records_with_phi = 0
+                total_non_blank = 0
+                first_failing: Optional[int] = None
+
+                for rec_idx in range(max_records_to_check):
                     recbuf = f.read(rec_bytes)
                     if not recbuf:
                         break
                     if len(recbuf) != rec_bytes:
                         break
 
+                    records_checked += 1
+                    record_has_phi = False
+
                     for off, sz in annot_segs:
                         seg = recbuf[off:off + sz]
-                        # _blank_tal_annotations preserves TAL structure: timestamps and
-                        # 0x14 separator bytes are kept intact, only annotation text is
-                        # replaced with spaces. A fully-zeroed or fully-space segment is
-                        # therefore NOT the expected output. Instead, check that no
-                        # printable ASCII text remains between 0x14 separators — i.e. all
-                        # bytes in text positions are 0x20 (space) or 0x00 (null/pad).
-                        # We accept any segment that contains no non-space printable bytes
-                        # outside of TAL structural bytes (0x14, 0x00, '+', '-', digits,
-                        # '.', '+'). Simplified check: reject only if segment contains
-                        # printable non-space, non-structural bytes, which would indicate
-                        # un-redacted annotation text is present.
-                        non_blank = any(
-                            0x21 <= b <= 0x7E and b not in (0x14, ord('+'), ord('-'), ord('.'))
+                        # Count bytes that indicate un-redacted annotation text:
+                        # printable ASCII (0x21-0x7E) excluding TAL structural bytes
+                        # (0x14, '+', '-', '.') and digit characters.
+                        # After correct anonymization only timing bytes and spaces/nulls remain.
+                        flagged = sum(
+                            1 for b in seg
+                            if 0x21 <= b <= 0x7E
+                            and b not in (0x14, ord('+'), ord('-'), ord('.'))
                             and chr(b) not in '0123456789'
-                            for b in seg
                         )
-                        if non_blank:
-                            ok = False
-                            break
-                    if not ok:
-                        break
+                        if flagged:
+                            total_non_blank += flagged
+                            record_has_phi = True
+
+                    if record_has_phi:
+                        records_with_phi += 1
+                        if first_failing is None:
+                            first_failing = rec_idx
+                        ok = False
 
                 result["annotations_blank_ok"] = ok
+                result["n_records_checked"] = records_checked
+                result["n_records_with_phi"] = records_with_phi
+                result["non_blank_byte_count"] = total_non_blank
+                result["first_failing_record"] = first_failing
 
         return result
 
