@@ -262,15 +262,22 @@ class EDFInfo:
             # Patient info
             patient_name = edf.getPatientName()
             patient_code = edf.getPatientCode()
-            gender = edf.getPatientGender()
+            _gender_raw = edf.getPatientGender()
+            # Normalize to BIDS-compliant single-letter code
+            if _gender_raw and _gender_raw.lower().startswith('f'):
+                gender = 'F'
+            elif _gender_raw and _gender_raw.lower().startswith('m'):
+                gender = 'M'
+            else:
+                gender = 'X'
             birthdate = edf.getPatientBirthDate()
-            
-            # Get channel labels
+
+            # Get channel labels — strip EDF header padding whitespace
             channel_labels = []
             channel_units = []
             for i in range(num_signals):
-                channel_labels.append(edf.getSignalLabel(i))
-                channel_units.append(edf.getPhysicalDimension(i))
+                channel_labels.append(edf.getSignalLabel(i).strip())
+                channel_units.append(edf.getPhysicalDimension(i).strip())
             
             # Determine recording type based on channel count
             threshold = self.config['general']['channel_threshold_ieeg']
@@ -286,10 +293,18 @@ class EDFInfo:
             else:
                 task = 'full'
             
-            # File type (EDF/EDF+/BDF/BDF+)
+            # File type — read reserved field directly to capture EDF+C vs EDF+D
             file_type = edf.getFileType()
-            type_map = {0: 'EDF', 1: 'EDF+', 2: 'BDF', 3: 'BDF+'}
+            type_map = {0: 'EDF', 1: 'EDF+C', 2: 'BDF', 3: 'BDF+'}
             edf_type = type_map.get(file_type, 'EDF')
+            try:
+                with open(self.filepath, 'rb') as _rf:
+                    _rf.seek(192)  # fixed-header reserved field offset
+                    _reserved = _rf.read(44).decode('latin-1').strip()
+                if _reserved in ('EDF+C', 'EDF+D', 'BDF+C', 'BDF+D'):
+                    edf_type = _reserved
+            except Exception:
+                pass
             
             # Get prefilter info for highpass/lowpass
             highpass = None
@@ -589,10 +604,15 @@ class BIDSWriter:
                 else:
                     bids_type = info['Type']
                     
+                # Extract group from alphabetic prefix before the first digit
+                # e.g. 'LOFr1' -> 'LOFr', 'C181' -> 'C'; non-numeric labels -> 'n/a'
+                _grp_match = re.match(r'^([A-Za-z]+)\d', name.strip())
+                group = _grp_match.group(1) if _grp_match else 'n/a'
+
                 rows.append({
-                    'name': name,
+                    'name': name.strip(),
                     'type': bids_type,
-                    'units': info['Unit'][i].replace('uV', 'μV'),
+                    'units': info['Unit'][i].strip().replace('uV', 'μV'),
                     # BIDS: low_cutoff = high-pass (lower edge of passband)
                     #       high_cutoff = low-pass  (upper edge of passband)
                     'low_cutoff':  edf_info.get('Highpass', 'n/a') or 'n/a',
@@ -600,7 +620,7 @@ class BIDSWriter:
                     'sampling_frequency': edf_info['SamplingFrequency'],
                     'notch': 'n/a',
                     'reference': 'n/a',
-                    'group': 'n/a'
+                    'group': group
                 })
         
         df = pd.DataFrame(rows)
@@ -610,19 +630,24 @@ class BIDSWriter:
     def write_electrodes(self, filepath, edf_info):
         """Write electrodes.tsv file."""
         rows = []
-        
+
         main_type = 'SEEG' if edf_info['RecordingType'] == 'iEEG' else 'EEG'
+        elec_key = 'iEEGElectrodeInfo' if main_type == 'SEEG' else 'EEGElectrodeInfo'
+        elec_info = self.config.get('equipment_info', {}).get(elec_key, {})
+
         if main_type in edf_info['ChanInfo']:
             for name in edf_info['ChanInfo'][main_type]['ChanName']:
                 rows.append({
-                    'name': name,
+                    'name': name.strip(),
                     'x': 'n/a',
                     'y': 'n/a',
                     'z': 'n/a',
-                    'size': 'n/a',
-                    'type': 'n/a'
+                    'size': elec_info.get('Diameter', 'n/a'),
+                    'type': elec_info.get('Type', 'n/a'),
+                    'material': elec_info.get('Material', 'n/a'),
+                    'manufacturer': elec_info.get('Manufacturer', 'n/a'),
                 })
-        
+
         df = pd.DataFrame(rows)
         df.to_csv(filepath, sep='\t', index=False)
         return filepath
@@ -659,26 +684,65 @@ class BIDSWriter:
             ('ElectrodeManufacturer', electrode_info['Manufacturer'])
         ])
         
-        # Add channel counts
-        for chan_type in ['EEG', 'SEEG', 'EOG', 'ECG', 'EMG', 'ECOG', 'MISC', 'TRIG']:
-            key = f'{chan_type}ChannelCount'
+        # Add channel counts — use exact BIDS spec key names
+        CHAN_COUNT_KEYS = {
+            'EEG':  'EEGChannelCount',
+            'SEEG': 'SEEGChannelCount',
+            'EOG':  'EOGChannelCount',
+            'ECG':  'ECGChannelCount',
+            'EMG':  'EMGChannelCount',
+            'ECOG': 'ECOGChannelCount',
+            'MISC': 'MiscChannelCount',
+            'TRIG': 'TriggerChannelCount',
+        }
+        for chan_type, key in CHAN_COUNT_KEYS.items():
             if chan_type in edf_info['ChanInfo']:
                 data[key] = edf_info['ChanInfo'][chan_type]['ChannelCount']
             else:
                 data[key] = 0
-        
-        # Declare the channels.tsv columns so the validator doesn't warn about
-        # undefined additional columns (TSV_ADDITIONAL_COLUMNS_UNDEFINED)
-        data['Columns'] = [
-            "name", "type", "units", "low_cutoff", "high_cutoff",
-            "sampling_frequency", "notch", "reference", "group"
-        ]
-        
+
+        # Optional iEEG-specific fields (empty strings kept for BIDS completeness)
+        if edf_info['RecordingType'] == 'iEEG':
+            data['SubjectArtefactDescription']     = config['equipment_info'].get('SubjectArtefactDescription', '')
+            data['iEEGPlacementScheme']             = config['equipment_info'].get('iEEGPlacementScheme', '')
+            data['iEEGElectrodeGroups']             = config['equipment_info'].get('iEEGElectrodeGroups', '')
+            data['iEEGReference']                   = config['equipment_info'].get('iEEGReference', '')
+            data['ElectricalStimulationParameters'] = config['equipment_info'].get('ElectricalStimulationParameters', '')
+
         with open(filepath, 'w') as f:
             json.dump(data, f, indent=4)
         
         return filepath
     
+    def write_bidsignore(self):
+        """Write .bidsignore (suppress annotation TSV warnings in validator)."""
+        filepath = os.path.join(self.output_path, '.bidsignore')
+        if not os.path.exists(filepath):
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write('**/sub-*_annotations.tsv\n')
+        return filepath
+
+    def write_scans_json(self, subject_id, session_id_full):
+        """Write scans.json sidecar alongside scans.tsv (documents non-standard columns)."""
+        scans_json_path = os.path.join(
+            self.output_path, subject_id, session_id_full,
+            f'{subject_id}_{session_id_full}_scans.json'
+        )
+        if not os.path.exists(scans_json_path):
+            data = {
+                "duration": {
+                    "Description": "total duration of the recording.",
+                    "Units": "hours."
+                },
+                "edf_type": {
+                    "Description": "type of EDF file.",
+                    "Units": "EDF+D or EDF+C."
+                }
+            }
+            with open(scans_json_path, 'w') as f:
+                json.dump(data, f, indent=4)
+        return scans_json_path
+
     def write_events(self, filepath, annotations):
         """Write events.tsv file from annotations."""
         if not annotations:
@@ -1152,9 +1216,10 @@ class EDF2BIDSConverter:
             # Create folders
             self.bids_writer.make_bids_folders(subject_id, session_id, kind)
             
-            # Write dataset description and README
+            # Write dataset description, README, and .bidsignore
             self.bids_writer.write_dataset_description()
             self.bids_writer.write_readme()
+            self.bids_writer.write_bidsignore()
             
             # Write participants
             self.bids_writer.write_participants(
@@ -1194,13 +1259,14 @@ class EDF2BIDSConverter:
             
             logs.append(f"EDF copied to: {edf_dest}")
             
-            # Write scans.tsv (session-level, with duration in hours and edf_type)
+            # Write scans.tsv + scans.json (session-level, duration in hours)
             acq_time = f"{edf_info['Date']}T{edf_info['Time']}"
             self.bids_writer.write_scans(
                 subject_id, session_id_full, edf_filename, acq_time,
                 duration_hours=edf_info['TotalRecordTime'],
                 edf_type=edf_info.get('EDF_type', 'n/a')
             )
+            self.bids_writer.write_scans_json(subject_id, session_id_full)
             
             # Write channels.tsv
             channels_path = edf_dest.replace(f'_{kind}.edf', '_channels.tsv')
